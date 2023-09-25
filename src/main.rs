@@ -8,6 +8,7 @@ use std::{
     time,
     time::{Duration, Instant},
 };
+use std::fmt::format;
 use std::thread::sleep;
 
 use serde::Deserialize;
@@ -29,6 +30,15 @@ use tui::{
 use app::{App, AppTab, InputMode};
 use config::Config;
 use pinepods_firewood::gen_funcs;
+use std::fs::File;
+use std::fs::create_dir_all;
+use std::ops::Not;
+use std::path::{Display, Path, PathBuf};
+use directories::{ProjectDirs};
+use std::io::Write;
+use serde_derive::Serialize;
+use serde_json::to_string;
+use std::fs;
 
 #[derive(Debug, Deserialize)]
 struct PinepodsCheck {
@@ -50,12 +60,94 @@ fn make_request(hostname: &String) -> Result<PinepodsCheck, reqwest::Error> {
     Ok(parsed_data)
 }
 
-fn connect_server() {
+fn verify_key(hostname: &String, api_key: &String) -> Result<PinepodsCheck, reqwest::Error> {
 
+
+    println!("{}", hostname);
+    println!("{}", &api_key);
+    let body = reqwest::blocking::Client::new();
+    let response = body
+        .get(hostname)
+        .header("Api-Key", api_key.trim().to_string())
+        .send()?;
+
+    let parsed_data: PinepodsCheck = response.json()?;
+    Ok(parsed_data)
+}
+fn get_app_path() -> Option<PathBuf> {
+    if let Some(proj_dirs) = ProjectDirs::from("org", "Gooseberry Development",  "Pinepods") {
+        Some(proj_dirs.config_dir().to_path_buf())
+    } else {
+        None
+    }
 }
 
+fn create_app_path(app_path: &Display) -> std::io::Result<()> {
+    create_dir_all(app_path.to_string())?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PinepodsConfig {
+    url: String,
+    api_key: String
+}
+fn store_pinepods_info(hostname: &String, api_key: &&str) -> std::io::Result<()> {
+    if let Some(app_path) = get_app_path() {
+        let config_path = app_path.join("pinepods_config.json");
+
+        let login_info = PinepodsConfig {
+            url: hostname.parse().unwrap(),
+            api_key: api_key.parse().unwrap()
+        };
+        let json = serde_json::to_string(&login_info)?;
+        let mut file = File::create(config_path)?;
+        file.write_all(json.as_bytes())?;
+    } else {
+        println!("Failed to get Config Path");
+    }
+    Ok(())
+}
+
+fn test_existing_config () -> std::io::Result<()> {
+    if let Some(app_path) = get_app_path() {
+        let mut config_path = app_path.join("pinepods_config.json");
+        let config_data: String = fs::read_to_string(&config_path)?;
+        let config_json: serde_json::Value = serde_json::from_str(&config_data)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        dbg!(config_json);
+        let pinepods_config: PinepodsConfig = serde_json::from_value(config_json)
+            .expect("Failed to convert JSON value to Config Struct");
+        let return_verify_login = verify_key(&pinepods_config.url, &pinepods_config.api_key);
+        match return_verify_login {
+            Ok(data) => {}
+            Err(data) => {}
+        };
+    } else { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "App Path not found"));
+    }
+    return Ok(())
+
+}
 fn main() -> Result<(), Box<dyn Error>> {
-    let firewood = "
+    let app_path = get_app_path().unwrap_or_else(|| {
+        eprintln!("Failed to get App Path");
+        std::process::exit(1);
+    });
+    println!("{}", Path::new(&app_path).exists());
+    if app_path.exists().not() {
+        create_app_path(&app_path.display()).unwrap();
+    }
+    let mut error_check = true;
+    let mut hostname: String = String::new();
+    let mut web_protocol: String = String::new();
+    let mut api_key: String = String::new();
+
+    let config_test = test_existing_config();
+    match config_test {
+        Ok(data) => {}
+        Err(data) => {
+            let firewood = "
        (
         )
        (  (
@@ -68,48 +160,68 @@ fn main() -> Result<(), Box<dyn Error>> {
  ( `.__ _  ___,')                                    _/
   `'(_ )_)(_)_)'                                    _/
     ";
-    println!("{}", firewood);
-    println!("Hello! Welcome to Pinepods Firewood!");
-    println!("This appears to be your first time starting. We'll first need to connect you to your Pinepods Server. Please enter your hostname below:");
-    println!("Is your server HTTP or HTTPS?");
-    let mut error_check = true;
-    let mut hostname: String = String::new();
-    let mut web_protocol: String = String::new();
+            println!("{}", firewood);
+            println!("Hello! Welcome to Pinepods Firewood!");
+            println!("This appears to be your first time starting the app. We'll first need to connect you to your Pinepods Server. Please enter your hostname below:");
+            while error_check {
+                println!("Is your server HTTP or HTTPS?");
+                loop {
+                    web_protocol.clear();
+                    std::io::stdin().read_line(&mut web_protocol).unwrap();
 
-    while error_check {
-        loop {
-            std::io::stdin().read_line(&mut web_protocol).unwrap();
+                    let trimmed_protocol = web_protocol.trim().to_lowercase();
+                    println!("{}", &trimmed_protocol);
 
-            let web_protocol = web_protocol.trim().to_lowercase();
-            let trimmed_protocol = web_protocol.trim().to_lowercase();
-
-            if trimmed_protocol == "http" || trimmed_protocol == "https" {
-                break
-            } else {
-                println!("Invalid protocol. Please enter HTTP or HTTPS.");
-            }
-        }
-
-
-        println!("Please enter your hostname without the http protocol below:");
-        println!("EX. pinepods.online");
-
-        std::io::stdin().read_line(&mut hostname).unwrap();
-
-        let return_value = make_request(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"));
-        match return_value {
-            Ok(data) => {
-                if data.status_code == 200 {
-                    println!("Connection Successful! Now starting application!");
-                    let temp_time = time::Duration::from_secs(2);
-                    sleep(temp_time);
-                } else {
-                    println!("Problem with Connection: Not a valid Pinepods Instance")
+                    if trimmed_protocol == "http" || trimmed_protocol == "https" {
+                        break
+                    } else {
+                        println!("Invalid protocol. Please enter HTTP or HTTPS.");
+                    }
                 }
 
-                error_check = false},
-            Err(e) => println!("Problem with Connection: {}", e)
-        };
+
+                println!("Please enter your hostname/ip without the http protocol below:");
+                println!("EX. pinepods.online, 10.0.0.10");
+
+                io::stdin().read_line(&mut hostname).unwrap();
+
+                let return_value = make_request(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"));
+                match return_value {
+                    Ok(data) => {
+                        if data.status_code == 200 {
+                            loop {
+                                println!("Connection Successful! Now please enter your api key to login:");
+                                io::stdin().read_line(&mut api_key).unwrap();
+                                let return_verify_login = verify_key(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"), &api_key);
+                                match return_verify_login {
+                                    Ok(data) => {
+                                        println!("Login Successful! Saving configuration and starting application!:");
+                                        let file_result = store_pinepods_info(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/data/"), &api_key.trim());
+                                        loop {
+                                            match file_result {
+                                                Ok(data) => { break }
+                                                Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location")
+                                            }
+                                        }
+                                        break
+                                    }
+                                    Err(e) => println!("API Key is not valid: {}", e)
+                                }
+                                println!("Please try again");
+                            }
+                            let temp_time = time::Duration::from_secs(2);
+                            sleep(temp_time);
+                            println!("hostname and api key: {}{}", &format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"), &api_key);
+                            error_check = false;
+                        } else {
+                            println!("Problem with Connection: Not a valid Pinepods Instance")
+                        }
+                    },
+                    Err(e) => println!("Problem with Connection: {}", e)
+                };
+                println!("Please Enter hostname again")
+            }
+        }
     }
     // setup terminal
     enable_raw_mode()?;
