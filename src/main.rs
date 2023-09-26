@@ -191,6 +191,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         if data.status_code == 200 {
                             loop {
                                 println!("Connection Successful! Now please enter your api key to login:");
+                                println!("If you aren't sure how to add an api key you can consult the docs here: https://www.pinepods.online/docs/tutorial-basics/adding-an-api-key");
                                 io::stdin().read_line(&mut api_key).unwrap();
                                 let return_verify_login = verify_key(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"), &api_key);
                                 match return_verify_login {
@@ -223,6 +224,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     }
+
+    helpers::requests::
+
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
