@@ -10,9 +10,7 @@ use std::{
 };
 use std::fmt::format;
 use std::thread::sleep;
-
 use serde::Deserialize;
-
 use crossterm::{
     event::{self, DisableMouseCapture, Event, KeyCode},
     execute,
@@ -26,19 +24,13 @@ use tui::{
     widgets::{Block, BorderType, Borders, Cell, Gauge, List, ListItem, Row, Table, Tabs},
     Frame, Terminal,
 };
-
 use app::{App, AppTab, InputMode};
 use config::Config;
 use pinepods_firewood::gen_funcs;
-use std::fs::File;
-use std::fs::create_dir_all;
 use std::ops::Not;
-use std::path::{Display, Path, PathBuf};
-use directories::{ProjectDirs};
 use std::io::Write;
 use serde_derive::Serialize;
 use serde_json::to_string;
-use std::fs;
 
 #[derive(Debug, Deserialize)]
 struct PinepodsCheck {
@@ -46,104 +38,26 @@ struct PinepodsCheck {
     pinepods_instance: bool
 }
 
-fn make_request(hostname: &String) -> Result<PinepodsCheck, reqwest::Error> {
-
-
-    println!("{}", hostname);
-    let body = reqwest::blocking::Client::new();
-    let response = body
-        .get(hostname)
-        .header("pinepods_api", "not_needed")
-        .send()?;
-
-    let parsed_data: PinepodsCheck = response.json()?;
-    Ok(parsed_data)
-}
-
-fn verify_key(hostname: &String, api_key: &String) -> Result<PinepodsCheck, reqwest::Error> {
-
-
-    println!("{}", hostname);
-    println!("{}", &api_key);
-    let body = reqwest::blocking::Client::new();
-    let response = body
-        .get(hostname)
-        .header("Api-Key", api_key.trim().to_string())
-        .send()?;
-
-    let parsed_data: PinepodsCheck = response.json()?;
-    Ok(parsed_data)
-}
-fn get_app_path() -> Option<PathBuf> {
-    if let Some(proj_dirs) = ProjectDirs::from("org", "Gooseberry Development",  "Pinepods") {
-        Some(proj_dirs.config_dir().to_path_buf())
-    } else {
-        None
-    }
-}
-
-fn create_app_path(app_path: &Display) -> std::io::Result<()> {
-    create_dir_all(app_path.to_string())?;
-    Ok(())
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct PinepodsConfig {
     url: String,
     api_key: String
 }
-fn store_pinepods_info(hostname: &String, api_key: &&str) -> std::io::Result<()> {
-    if let Some(app_path) = get_app_path() {
-        let config_path = app_path.join("pinepods_config.json");
 
-        let login_info = PinepodsConfig {
-            url: hostname.parse().unwrap(),
-            api_key: api_key.parse().unwrap()
-        };
-        let json = serde_json::to_string(&login_info)?;
-        let mut file = File::create(config_path)?;
-        file.write_all(json.as_bytes())?;
-    } else {
-        println!("Failed to get Config Path");
-    }
-    Ok(())
-}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let mut pinepods_values = helpers::requests::ReqwestValues {
+        url: &*String::new(),
+        api_key: &*String::new(),
+        user_id: 2,
+    };
 
-fn test_existing_config () -> std::io::Result<()> {
-    if let Some(app_path) = get_app_path() {
-        let mut config_path = app_path.join("pinepods_config.json");
-        let config_data: String = fs::read_to_string(&config_path)?;
-        let config_json: serde_json::Value = serde_json::from_str(&config_data)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-
-        dbg!(config_json);
-        let pinepods_config: PinepodsConfig = serde_json::from_value(config_json)
-            .expect("Failed to convert JSON value to Config Struct");
-        let return_verify_login = verify_key(&pinepods_config.url, &pinepods_config.api_key);
-        match return_verify_login {
-            Ok(data) => {}
-            Err(data) => {}
-        };
-    } else { return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "App Path not found"));
-    }
-    return Ok(())
-
-}
-fn main() -> Result<(), Box<dyn Error>> {
-    let app_path = get_app_path().unwrap_or_else(|| {
-        eprintln!("Failed to get App Path");
-        std::process::exit(1);
-    });
-    println!("{}", Path::new(&app_path).exists());
-    if app_path.exists().not() {
-        create_app_path(&app_path.display()).unwrap();
-    }
     let mut error_check = true;
     let mut hostname: String = String::new();
     let mut web_protocol: String = String::new();
     let mut api_key: String = String::new();
 
-    let config_test = test_existing_config();
+    let config_test = helpers::requests::test_existing_config();
     match config_test {
         Ok(data) => {}
         Err(data) => {
@@ -184,20 +98,19 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("EX. pinepods.online, 10.0.0.10");
 
                 io::stdin().read_line(&mut hostname).unwrap();
-
-                let return_value = make_request(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"));
-                match return_value {
+                pinepods_values.url = (&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"));
+                match pinepods_values.make_request().await {
                     Ok(data) => {
                         if data.status_code == 200 {
                             loop {
                                 println!("Connection Successful! Now please enter your api key to login:");
                                 println!("If you aren't sure how to add an api key you can consult the docs here: https://www.pinepods.online/docs/tutorial-basics/adding-an-api-key");
                                 io::stdin().read_line(&mut api_key).unwrap();
-                                let return_verify_login = verify_key(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"), &api_key);
+                                let return_verify_login = pinepods_values.verify_key();
                                 match return_verify_login {
                                     Ok(data) => {
                                         println!("Login Successful! Saving configuration and starting application!:");
-                                        let file_result = store_pinepods_info(&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/data/"), &api_key.trim());
+                                        let file_result = pinepods_values.store_pinepods_info();
                                         loop {
                                             match file_result {
                                                 Ok(data) => { break }
@@ -211,8 +124,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                                 println!("Please try again");
                             }
                             let temp_time = time::Duration::from_secs(2);
-                            sleep(temp_time);
-                            println!("hostname and api key: {}{}", &format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"), &api_key);
+                            tokio::time::sleep(temp_time).await;
                             error_check = false;
                         } else {
                             println!("Problem with Connection: Not a valid Pinepods Instance")
@@ -225,7 +137,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    helpers::requests::
+    match pinepods_values.return_pods().await {
+        Ok(pods) => println!("Podcasts: {:?}", pods),
+        Err(e) => eprintln!("Request failed: {:?}", e),
+    }
 
     // setup terminal
     enable_raw_mode()?;
