@@ -32,6 +32,7 @@ use std::io::Write;
 use serde_derive::Serialize;
 use serde_json::to_string;
 
+
 #[derive(Debug, Deserialize)]
 struct PinepodsCheck {
     status_code: u16,
@@ -47,8 +48,8 @@ struct PinepodsConfig {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut pinepods_values = helpers::requests::ReqwestValues {
-        url: &*String::new(),
-        api_key: &*String::new(),
+        url: String::new(),
+        api_key: String::new(),
         user_id: 2,
     };
 
@@ -58,8 +59,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut api_key: String = String::new();
 
     let config_test = helpers::requests::test_existing_config();
-    match config_test {
-        Ok(data) => {}
+    match config_test.await {
+        Ok(data) => {
+            println!("Heres the url {}", data.url);
+            pinepods_values.url = String::from(data.url);
+            pinepods_values.api_key = data.api_key;
+
+            match pinepods_values.get_userid().await {
+                Ok(id) => {
+                    println!("Podcasts: {:?}", &id);
+                    pinepods_values.user_id = id;
+                }
+                Err(e) => eprintln!("Request failed: {:?}", e),
+            }
+        }
         Err(data) => {
             let firewood = "
        (
@@ -84,7 +97,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     std::io::stdin().read_line(&mut web_protocol).unwrap();
 
                     let trimmed_protocol = web_protocol.trim().to_lowercase();
-                    println!("{}", &trimmed_protocol);
 
                     if trimmed_protocol == "http" || trimmed_protocol == "https" {
                         break
@@ -95,10 +107,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 
                 println!("Please enter your hostname/ip without the http protocol below:");
-                println!("EX. pinepods.online, 10.0.0.10");
+                println!("EX. pinepods.online, 10.0.0.10:8040");
 
                 io::stdin().read_line(&mut hostname).unwrap();
-                pinepods_values.url = (&format!("{}{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim(), "/api/pinepods_check"));
+                let url_build = String::from((format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim())));
+                pinepods_values.url = url_build;
                 match pinepods_values.make_request().await {
                     Ok(data) => {
                         if data.status_code == 200 {
@@ -106,20 +119,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
                                 println!("Connection Successful! Now please enter your api key to login:");
                                 println!("If you aren't sure how to add an api key you can consult the docs here: https://www.pinepods.online/docs/tutorial-basics/adding-an-api-key");
                                 io::stdin().read_line(&mut api_key).unwrap();
+                                pinepods_values.api_key = api_key.clone();
                                 let return_verify_login = pinepods_values.verify_key();
-                                match return_verify_login {
+                                match return_verify_login.await {
                                     Ok(data) => {
                                         println!("Login Successful! Saving configuration and starting application!:");
                                         let file_result = pinepods_values.store_pinepods_info();
                                         loop {
-                                            match file_result {
+                                            match file_result.await {
                                                 Ok(data) => { break }
                                                 Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location")
                                             }
                                         }
                                         break
                                     }
-                                    Err(e) => println!("API Key is not valid: {}", e)
+                                    Err(e) => println!("API Key is not valid: {:?}", e)
                                 }
                                 println!("Please try again");
                             }
@@ -130,9 +144,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             println!("Problem with Connection: Not a valid Pinepods Instance")
                         }
                     },
-                    Err(e) => println!("Problem with Connection: {}", e)
+                    Err(e) => println!("Problem with Connection: {:?}", e)
                 };
-                println!("Please Enter hostname again")
+            }
+            match pinepods_values.get_userid().await {
+                Ok(id) => {
+                    pinepods_values.user_id = id;
+                }
+                Err(e) => eprintln!("Request failed: {:?}", e),
             }
         }
     }
@@ -335,6 +354,7 @@ fn music_tab<B: Backend>(f: &mut Frame<B>, app: &mut App, chunks: Rect, cfg: &Co
         .iter()
         .map(|i| ListItem::new(Text::from(i.to_owned())))
         .collect();
+    // println!("{:?}", &items);
 
     // Create a List from all list items and highlight the currently selected one // RENDER 1
     let items = List::new(items)
