@@ -31,6 +31,7 @@ use std::ops::Not;
 use std::io::Write;
 use serde_derive::Serialize;
 use serde_json::to_string;
+use std::sync::{Arc, Mutex};
 
 
 #[derive(Debug, Deserialize)]
@@ -47,11 +48,11 @@ struct PinepodsConfig {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let mut pinepods_values = helpers::requests::ReqwestValues {
+    let mut shared_values = Arc::new(Mutex::new(helpers::requests::ReqwestValues {
         url: String::new(),
         api_key: String::new(),
         user_id: 2,
-    };
+    }));
 
     let mut error_check = true;
     let mut hostname: String = String::new();
@@ -62,6 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match config_test.await {
         Ok(data) => {
             println!("Heres the url {}", data.url);
+            let mut pinepods_values = shared_values.lock().unwrap();
             pinepods_values.url = String::from(data.url);
             pinepods_values.api_key = data.api_key;
 
@@ -171,7 +173,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // create app and run it
     let tick_rate = Duration::from_secs(1);
-    let app = App::new();
+    let app = App::new(shared_values.clone()).await;
     let cfg = Config::new();
 
     let res = run_app(&mut terminal, app, cfg, tick_rate);

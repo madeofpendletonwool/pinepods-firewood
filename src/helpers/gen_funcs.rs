@@ -4,6 +4,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use std::sync::{Arc, Mutex};
+
 use glob::{glob_with, MatchOptions};
 use lofty::{Accessor, Probe, TaggedFileExt};
 
@@ -32,38 +34,57 @@ pub fn audio_display(path: &PathBuf) -> String {
 }
 
 // scans folder for valid files, returns matches
-pub fn scan_folder() -> Vec<String> {
-    let mut items = Vec::new();
-    let options = MatchOptions {
-        case_sensitive: false,
-        require_literal_separator: false,
-        require_literal_leading_dot: false,
+pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestValues>>) -> Vec<String> {
+    let mut podcast_names = Vec::new();
+
+    let pinepods_locked = pinepods_values.lock().unwrap();
+    let podcasts = match pinepods_locked.return_pods().await {
+        Ok(pods) => pods,
+        Err(e) => {
+            eprintln!("Request failed: {:?}", e);
+            return podcast_names; // return empty list on error
+        }
     };
 
-    for item in glob_with("./*", options)
-        .expect("Failed to read glob pattern")
-        .flatten()
-    {
-        let current_dir = env::current_dir().unwrap();
-        let join = Path::join(&current_dir, Path::new(&item));
-        let ext = Path::new(&item).extension().and_then(OsStr::to_str);
 
-        // if folder  (Hide Private) enter, else play song
-        if (join.is_dir() && !join.file_name().unwrap().to_str().unwrap().starts_with('.'))
-            || (ext.is_some()
-            && (item.extension().unwrap() == "mp3"
-            || item.extension().unwrap() == "mp4"
-            || item.extension().unwrap() == "m4a"
-            || item.extension().unwrap() == "wav"
-            || item.extension().unwrap() == "flac"
-            || item.extension().unwrap() == "ogg"
-            || item.extension().unwrap() == "aac"))
-        {
-            items.push(item.to_str().unwrap().to_owned());
+    for podcast in podcasts.iter() {
+        if let Some(podcast_name) = podcast["PodcastName"].as_str() {
+            podcast_names.push(podcast_name.to_owned());
         }
     }
-    items
+
+    podcast_names
 }
+
+pub fn display_podcast_details(podcast: &serde_json::Value) {
+    if let Some(podcast_name) = podcast["PodcastName"].as_str() {
+        println!("Podcast Name: {}", podcast_name);
+    }
+    if let Some(author) = podcast["Author"].as_str() {
+        println!("Author: {}", author);
+    }
+    // ... add other fields similarly
+}
+
+// Example of usage:
+
+// let podcast_names = list_podcasts().await;
+// for (index, name) in podcast_names.iter().enumerate() {
+// println!("{}: {}", index + 1, name);
+// }
+//
+// println!("Enter the number of the podcast you want to explore:");
+// let mut input = String::new();
+// io::stdin().read_line(&mut input).unwrap();
+// let choice: usize = input.trim().parse().unwrap_or(0);
+//
+// if choice > 0 && choice <= podcast_names.len() {
+// let selected_podcast = &podcasts[choice - 1];
+// display_podcast_details(&selected_podcast);
+// } else {
+// println!("Invalid choice!");
+// }
+
 
 // scans folder for valid files, returns matches
 // need to set current dir
