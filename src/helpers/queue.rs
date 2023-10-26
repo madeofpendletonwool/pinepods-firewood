@@ -4,7 +4,7 @@ use std::{
 };
 
 use lofty::{AudioFile, Probe};
-use tui::widgets::ListState;
+use ratatui::widgets::ListState;
 
 use super::gen_funcs::bulk_add;
 use super::constants::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};

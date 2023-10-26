@@ -12,6 +12,7 @@ use serde_derive::Serialize;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use super::models;
+use log::error;
 
 #[derive(Debug)]
 pub enum PinepodsError {
@@ -33,8 +34,8 @@ impl From<serde_json::Error> for PinepodsError {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PinepodsConfig {
-    pub(crate) url: String,
-    pub(crate) api_key: String
+    pub url: String,
+    pub api_key: String
 }
 
 async fn verify_existing_key(hostname: &String, api_key: &String) -> Result<models::PinepodsUserResponse, PinepodsError> {
@@ -93,9 +94,9 @@ pub async fn test_existing_config () -> std::io::Result<PinepodsConfig> {
 }
 
 pub struct ReqwestValues {
-    pub(crate) url: String,
-    pub(crate) api_key: String,
-    pub(crate) user_id: i64,
+    pub url: String,
+    pub api_key: String,
+    pub user_id: i64,
 }
 
 impl ReqwestValues {
@@ -170,6 +171,7 @@ impl ReqwestValues {
     }
 
     pub async fn return_pods(&self) -> Result<Vec<Value>> {
+        error!("in return pods...");
         let client = reqwest::Client::new();
         let response = client
             .get(&format!("{}/api/data/return_pods/{}", &self.url, &self.user_id)) // Format the URL

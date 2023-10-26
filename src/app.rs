@@ -5,13 +5,14 @@ use std::{
     time::Duration,
 };
 use std::sync::{Arc, Mutex};
+use log::{info, debug, warn, error};
 
 use pinepods_firewood::gen_funcs;
 use pinepods_firewood::music_handler::MusicHandle;
 use pinepods_firewood::queue::Queue;
 use pinepods_firewood::stateful_list::StatefulList;
 use pinepods_firewood::stateful_table::StatefulTable;
-use crate::helpers::requests::ReqwestValues;
+use pinepods_firewood::helpers::requests::ReqwestValues;
 
 #[derive(Clone, Copy)]
 pub enum InputMode {
@@ -46,18 +47,18 @@ pub struct App<'a> {
     input_mode: InputMode,
     pub titles: Vec<&'a str>,
     pub active_tab: AppTab,
-    pub pinepods_values: Arc<Mutex<super::helpers::requests::ReqwestValues>>,
+    pub pinepods_values: Arc<Mutex<ReqwestValues>>,
 }
 
 impl<'a> App<'a> {
-    pub async fn new(pinepods_values: Arc<Mutex<ReqwestValues>>) -> Self {
-        Self {
-            browser_items: StatefulList::with_items(gen_funcs::scan_folder(gen_funcs::scan_folder(&pinepods_values))),
+    pub async fn new(pinepods_values: Arc<Mutex<ReqwestValues>>) -> App<'a> {
+        App {
+            browser_items: StatefulList::with_items(gen_funcs::scan_folder(&pinepods_values).await),
             queue_items: Queue::with_items(),
             control_table: StatefulTable::new(),
             music_handle: MusicHandle::new(),
             input_mode: InputMode::Browser,
-            titles: vec!["Music", "Controls"],
+            titles: vec!["Podcasts", "Controls"],
             active_tab: AppTab::Music,
             pinepods_values
         }
@@ -84,12 +85,12 @@ impl<'a> App<'a> {
     }
 
     // if item selected is folder, enter folder, else play record.
-    pub fn evaluate(&mut self) {
+    pub async fn evaluate(&mut self) {
         let join = self.selected_item();
         // if folder enter, else play song
         if join.is_dir() {
             env::set_current_dir(join).unwrap();
-            self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values));
+            self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values).await);
             self.browser_items.next();
         } else {
             self.music_handle.play(join);
@@ -97,9 +98,9 @@ impl<'a> App<'a> {
     }
 
     // cd into selected directory
-    pub fn backpedal(&mut self) {
+    pub async fn backpedal(&mut self) {
         env::set_current_dir("../").unwrap();
-        self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values));
+        self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values).await);
         self.browser_items.next();
     }
 
