@@ -1,4 +1,4 @@
-use tui::widgets::ListState;
+use ratatui::widgets::ListState;
 
 // TODO encapsulation
 pub struct StatefulList<T> {

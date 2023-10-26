@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex};
 use glob::{glob_with, MatchOptions};
 use lofty::{Accessor, Probe, TaggedFileExt};
 
+use log::error;
+
 // converts queue items to what's displayed for user
 pub fn audio_display(path: &PathBuf) -> String {
     let path = Path::new(&path);
@@ -37,9 +39,22 @@ pub fn audio_display(path: &PathBuf) -> String {
 pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestValues>>) -> Vec<String> {
     let mut podcast_names = Vec::new();
 
-    let pinepods_locked = pinepods_values.lock().unwrap();
-    let podcasts = match pinepods_locked.return_pods().await {
-        Ok(pods) => pods,
+    error!("before lock...");
+
+    let podcasts = {
+        let pinepods_locked = pinepods_values.lock().expect("Lock is poisoned!");
+        pinepods_locked.return_pods().await
+    };
+
+    match podcasts {
+        Ok(pods) => {
+            error!("pods return finished...");
+            for podcast in pods.iter() {
+                if let Some(podcast_name) = podcast["PodcastName"].as_str() {
+                    podcast_names.push(podcast_name.to_owned());
+                }
+            }
+        },
         Err(e) => {
             eprintln!("Request failed: {:?}", e);
             return podcast_names; // return empty list on error
@@ -47,11 +62,7 @@ pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestVal
     };
 
 
-    for podcast in podcasts.iter() {
-        if let Some(podcast_name) = podcast["PodcastName"].as_str() {
-            podcast_names.push(podcast_name.to_owned());
-        }
-    }
+    error!("after lock...");
 
     podcast_names
 }

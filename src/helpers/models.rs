@@ -2,7 +2,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct PinepodsCheck {
-    pub(crate) status_code: u16,
+    pub status_code: u16,
     pub(crate) pinepods_instance: bool
 }
 

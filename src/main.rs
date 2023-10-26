@@ -1,6 +1,5 @@
 mod app;
 mod config;
-mod helpers;
 
 use std::{
     error::Error,
@@ -8,30 +7,33 @@ use std::{
     time,
     time::{Duration, Instant},
 };
+use app::{App, AppTab, InputMode};
 use std::fmt::format;
 use std::thread::sleep;
 use serde::Deserialize;
 use crossterm::{
-    event::{self, DisableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    ExecutableCommand
 };
-use tui::{
-    backend::{Backend, CrosstermBackend},
+use ratatui::{
+    prelude::{CrosstermBackend, Stylize, Terminal, Backend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    text::{Span, Spans, Text},
-    widgets::{Block, BorderType, Borders, Cell, Gauge, List, ListItem, Row, Table, Tabs},
-    Frame, Terminal,
+    text::{Span, Line, Text},
+    widgets::{Block, BorderType, Borders, Cell, Gauge, List, ListItem, Row, Table, Tabs, Paragraph},
+    Frame
 };
-use app::{App, AppTab, InputMode};
+// use app::{App, AppTab, InputMode};
 use config::Config;
 use pinepods_firewood::gen_funcs;
 use std::ops::Not;
-use std::io::Write;
+use std::io::{Write, stderr, Result};
 use serde_derive::Serialize;
 use serde_json::to_string;
 use std::sync::{Arc, Mutex};
+use log::{info, debug, warn, error};
 
 
 #[derive(Debug, Deserialize)]
@@ -47,36 +49,40 @@ struct PinepodsConfig {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let mut shared_values = Arc::new(Mutex::new(helpers::requests::ReqwestValues {
+async fn main() -> Result<()> {
+    env_logger::init();
+    let mut shared_values = Arc::new(Mutex::new(pinepods_firewood::helpers::requests::ReqwestValues {
         url: String::new(),
         api_key: String::new(),
         user_id: 2,
     }));
+
+    // let mut pinepods_values = shared_values.lock().unwrap();
 
     let mut error_check = true;
     let mut hostname: String = String::new();
     let mut web_protocol: String = String::new();
     let mut api_key: String = String::new();
 
-    let config_test = helpers::requests::test_existing_config();
-    match config_test.await {
-        Ok(data) => {
-            println!("Heres the url {}", data.url);
-            let mut pinepods_values = shared_values.lock().unwrap();
-            pinepods_values.url = String::from(data.url);
-            pinepods_values.api_key = data.api_key;
+    {
+        let mut pinepods_values = shared_values.lock().unwrap();
+        let config_test = pinepods_firewood::helpers::requests::test_existing_config();
+        match config_test.await {
+            Ok(data) => {
+                println!("Heres the url {}", data.url);
+                pinepods_values.url = String::from(data.url);
+                pinepods_values.api_key = data.api_key;
 
-            match pinepods_values.get_userid().await {
-                Ok(id) => {
-                    println!("Podcasts: {:?}", &id);
-                    pinepods_values.user_id = id;
+                match pinepods_values.get_userid().await {
+                    Ok(id) => {
+                        println!("Podcasts: {:?}", &id);
+                        pinepods_values.user_id = id;
+                    }
+                    Err(e) => eprintln!("Request failed: {:?}", e),
                 }
-                Err(e) => eprintln!("Request failed: {:?}", e),
             }
-        }
-        Err(data) => {
-            let firewood = "
+            Err(data) => {
+                let firewood = "
        (
         )
        (  (
@@ -89,80 +95,83 @@ async fn main() -> Result<(), Box<dyn Error>> {
  ( `.__ _  ___,')                                    _/
   `'(_ )_)(_)_)'                                    _/
     ";
-            println!("{}", firewood);
-            println!("Hello! Welcome to Pinepods Firewood!");
-            println!("This appears to be your first time starting the app. We'll first need to connect you to your Pinepods Server. Please enter your hostname below:");
-            while error_check {
-                println!("Is your server HTTP or HTTPS?");
-                loop {
-                    web_protocol.clear();
-                    std::io::stdin().read_line(&mut web_protocol).unwrap();
+                println!("{}", firewood);
+                println!("Hello! Welcome to Pinepods Firewood!");
+                println!("This appears to be your first time starting the app. We'll first need to connect you to your Pinepods Server. Please enter your hostname below:");
+                while error_check {
+                    println!("Is your server HTTP or HTTPS?");
+                    loop {
+                        web_protocol.clear();
+                        std::io::stdin().read_line(&mut web_protocol).unwrap();
 
-                    let trimmed_protocol = web_protocol.trim().to_lowercase();
+                        let trimmed_protocol = web_protocol.trim().to_lowercase();
 
-                    if trimmed_protocol == "http" || trimmed_protocol == "https" {
-                        break
-                    } else {
-                        println!("Invalid protocol. Please enter HTTP or HTTPS.");
-                    }
-                }
-
-
-                println!("Please enter your hostname/ip without the http protocol below:");
-                println!("EX. pinepods.online, 10.0.0.10:8040");
-
-                io::stdin().read_line(&mut hostname).unwrap();
-                let url_build = String::from((format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim())));
-                pinepods_values.url = url_build;
-                match pinepods_values.make_request().await {
-                    Ok(data) => {
-                        if data.status_code == 200 {
-                            loop {
-                                println!("Connection Successful! Now please enter your api key to login:");
-                                println!("If you aren't sure how to add an api key you can consult the docs here: https://www.pinepods.online/docs/tutorial-basics/adding-an-api-key");
-                                io::stdin().read_line(&mut api_key).unwrap();
-                                pinepods_values.api_key = api_key.clone();
-                                let return_verify_login = pinepods_values.verify_key();
-                                match return_verify_login.await {
-                                    Ok(data) => {
-                                        println!("Login Successful! Saving configuration and starting application!:");
-                                        let file_result = pinepods_values.store_pinepods_info();
-                                        loop {
-                                            match file_result.await {
-                                                Ok(data) => { break }
-                                                Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location")
-                                            }
-                                        }
-                                        break
-                                    }
-                                    Err(e) => println!("API Key is not valid: {:?}", e)
-                                }
-                                println!("Please try again");
-                            }
-                            let temp_time = time::Duration::from_secs(2);
-                            tokio::time::sleep(temp_time).await;
-                            error_check = false;
+                        if trimmed_protocol == "http" || trimmed_protocol == "https" {
+                            break
                         } else {
-                            println!("Problem with Connection: Not a valid Pinepods Instance")
+                            println!("Invalid protocol. Please enter HTTP or HTTPS.");
                         }
-                    },
-                    Err(e) => println!("Problem with Connection: {:?}", e)
-                };
-            }
-            match pinepods_values.get_userid().await {
-                Ok(id) => {
-                    pinepods_values.user_id = id;
+                    }
+
+
+                    println!("Please enter your hostname/ip without the http protocol below:");
+                    println!("EX. pinepods.online, 10.0.0.10:8040");
+
+                    io::stdin().read_line(&mut hostname).unwrap();
+                    let url_build = String::from((format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim())));
+                    pinepods_values.url = url_build;
+                    match pinepods_values.make_request().await {
+                        Ok(data) => {
+                            if data.status_code == 200 {
+                                loop {
+                                    println!("Connection Successful! Now please enter your api key to login:");
+                                    println!("If you aren't sure how to add an api key you can consult the docs here: https://www.pinepods.online/docs/tutorial-basics/adding-an-api-key");
+                                    io::stdin().read_line(&mut api_key).unwrap();
+                                    pinepods_values.api_key = api_key.clone();
+                                    let return_verify_login = pinepods_values.verify_key();
+                                    match return_verify_login.await {
+                                        Ok(data) => {
+                                            println!("Login Successful! Saving configuration and starting application!:");
+                                            let file_result = pinepods_values.store_pinepods_info();
+                                            loop {
+                                                match file_result.await {
+                                                    Ok(data) => { break }
+                                                    Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location")
+                                                }
+                                            }
+                                            break
+                                        }
+                                        Err(e) => println!("API Key is not valid: {:?}", e)
+                                    }
+                                    println!("Please try again");
+                                }
+                                let temp_time = time::Duration::from_secs(2);
+                                tokio::time::sleep(temp_time).await;
+                                error_check = false;
+                            } else {
+                                println!("Problem with Connection: Not a valid Pinepods Instance")
+                            }
+                        },
+                        Err(e) => println!("Problem with Connection: {:?}", e)
+                    };
                 }
-                Err(e) => eprintln!("Request failed: {:?}", e),
+                match pinepods_values.get_userid().await {
+                    Ok(id) => {
+                        pinepods_values.user_id = id;
+                    }
+                    Err(e) => eprintln!("Request failed: {:?}", e),
+                }
             }
         }
     }
-
+    {
+    let mut pinepods_values = shared_values.lock().unwrap();
     match pinepods_values.return_pods().await {
         Ok(pods) => println!("Podcasts: {:?}", pods),
         Err(e) => eprintln!("Request failed: {:?}", e),
     }
-
+        }
+    error!("Setting up terminal...");
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -172,13 +181,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut terminal = Terminal::new(backend)?;
 
     // create app and run it
+    error!("creating app...");
     let tick_rate = Duration::from_secs(1);
-    let app = App::new(shared_values.clone()).await;
+    let app = App::new(shared_values.clone());
     let cfg = Config::new();
-
-    let res = run_app(&mut terminal, app, cfg, tick_rate);
+    error!("running app...");
+    let res = run_app(&mut terminal, app.await, cfg, tick_rate).await;
 
     // restore terminal
+    error!("shutdown app...");
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -194,30 +205,80 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run_app<B: Backend>(
+
+
+//     loop {
+//         terminal.draw(|frame| {
+//             let area = frame.size();
+//             frame.render_widget(
+//                 Paragraph::new("Hello Ratatui! (press 'q' to quit)"),
+//                 area,
+//             );
+//         })?;
+//
+//         if event::poll(std::time::Duration::from_millis(100))? {
+//             if let event::Event::Key(key) = event::read()? {
+//                 if key.kind == KeyEventKind::Press && (key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q')) {
+//                     break;
+//                 }
+//             }
+//         }
+//     }
+//
+//     stderr().execute(LeaveAlternateScreen)?;
+//     disable_raw_mode()?;
+//     Ok(())
+// }
+
+
+
+
+
+
+//
+//     // restore terminal
+//     disable_raw_mode()?;
+//     execute!(
+//         terminal.backend_mut(),
+//         LeaveAlternateScreen,
+//         DisableMouseCapture
+//     )?;
+//     terminal.show_cursor()?;
+//
+//     if let Err(err) = res {
+//         eprintln!("{:?}", err)
+//     }
+//
+//     Ok(())
+// }
+//
+async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
-    mut app: App,
+    mut app: App<'_>,
     cfg: Config,
     tick_rate: Duration,
 ) -> io::Result<()> {
+    error!("in run_app...");
     let mut last_tick = Instant::now();
     loop {
-        terminal.draw(|f| ui(f, &mut app, &cfg))?;
+        terminal.draw(|f| ui::<B>(f, &mut app, &cfg))?;
 
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
+        error!("Before crossterm poll...");
         if crossterm::event::poll(timeout)? {
             // different keys depending on which browser tab
             if let Event::Key(key) = event::read()? {
                 match app.input_mode() {
+                    // error!("setting key press...");
                     InputMode::Browser => match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('p') | KeyCode::Char(' ') => app.music_handle.play_pause(),
                         KeyCode::Char('g') => app.music_handle.skip(),
                         KeyCode::Char('a') => app.queue_items.add(app.selected_item()),
-                        KeyCode::Enter => app.evaluate(),
-                        KeyCode::Backspace => app.backpedal(),
+                        KeyCode::Enter => app.evaluate().await,
+                        KeyCode::Backspace => app.backpedal().await,
                         KeyCode::Down | KeyCode::Char('j') => app.browser_items.next(),
                         KeyCode::Up | KeyCode::Char('k') => app.browser_items.previous(),
                         KeyCode::Right | KeyCode::Char('l') => {
@@ -278,13 +339,14 @@ fn run_app<B: Backend>(
                 }
             }
         }
+        error!("After crossterm poll...");
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
         }
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App, cfg: &Config) {
+fn ui<B: Backend>(f: &mut Frame, app: &mut App, cfg: &Config) {
     // Total Size
     let size = f.size();
 
@@ -304,7 +366,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App, cfg: &Config) {
         .iter()
         .map(|t| {
             let (first, rest) = t.split_at(1);
-            Spans::from(vec![
+            Line::from(vec![
                 Span::styled(first, Style::default().fg(cfg.highlight_background())), // CHANGE FOR CUSTOMIZATION
                 Span::styled(rest, Style::default().fg(cfg.highlight_background())), // These are tab highlights, first vs rest diff colors
             ])
@@ -324,12 +386,12 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App, cfg: &Config) {
     f.render_widget(tabs, chunks[0]);
 
     match app.active_tab {
-        AppTab::Music => music_tab(f, app, chunks[1], cfg),
-        AppTab::Controls => instructions_tab(f, app, chunks[1], cfg),
+        AppTab::Music => music_tab::<B>(f, app, chunks[1], cfg),
+        AppTab::Controls => instructions_tab::<B>(f, app, chunks[1], cfg),
     };
 }
 
-fn music_tab<B: Backend>(f: &mut Frame<B>, app: &mut App, chunks: Rect, cfg: &Config) {
+fn music_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Config) {
     // split into left / right
     let browser_queue = Layout::default()
         .direction(Direction::Horizontal)
@@ -425,7 +487,7 @@ fn music_tab<B: Backend>(f: &mut Frame<B>, app: &mut App, chunks: Rect, cfg: &Co
     f.render_widget(playing, queue_playing[1]);
 }
 
-fn instructions_tab<B: Backend>(f: &mut Frame<B>, app: &mut App, chunks: Rect, cfg: &Config) {
+fn instructions_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Config) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(2)
@@ -475,7 +537,5 @@ fn instructions_tab<B: Backend>(f: &mut Frame<B>, app: &mut App, chunks: Rect, c
         ]);
     f.render_stateful_widget(t, chunks[0], &mut app.control_table.state);
 }
-
-
 
 
