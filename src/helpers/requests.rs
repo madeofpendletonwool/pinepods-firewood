@@ -134,7 +134,28 @@ impl ReqwestValues {
 
     pub async fn store_pinepods_info(&self) -> std::io::Result<()> {
         if let Some(app_path) = get_app_path() {
+            use std::path::Path;
+            use dirs::home_dir;
+            if let Some(home_directory) = home_dir() {
+                let config_path = home_directory.join(".config");
+                let pinepods_path = config_path.join("pinepods");
+
+                if config_path.exists() && pinepods_path.exists() {
+                    println!("Both .config and .config/pinepods exist");
+                } else if config_path.exists() {
+                    println!("Just the pinepods config folder is missing");
+                    fs::create_dir(pinepods_path)?;
+                } else {
+                    println!("One or both of the directories do not exist");
+                    println!("{:?}", pinepods_path);
+                    fs::create_dir(config_path)?;
+                    fs::create_dir(pinepods_path)?;
+                }
+            } else {
+                println!("Could not determine the home directory");
+            }
             let config_path = app_path.join("pinepods_config.json");
+            println!("{:?}", &config_path);
 
             let login_info = PinepodsConfig {
                 url: (&self.url.clone()).parse().unwrap(),
