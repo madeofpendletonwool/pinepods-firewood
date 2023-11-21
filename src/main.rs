@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
                                             loop {
                                                 match file_result.await {
                                                     Ok(data) => { break }
-                                                    Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location")
+                                                    Err(e) => panic!("Unable to save configuration! Maybe you don't have permission to config location, {}", e)
                                                 }
                                             }
                                             break
@@ -207,51 +207,6 @@ async fn main() -> Result<()> {
 
 
 
-//     loop {
-//         terminal.draw(|frame| {
-//             let area = frame.size();
-//             frame.render_widget(
-//                 Paragraph::new("Hello Ratatui! (press 'q' to quit)"),
-//                 area,
-//             );
-//         })?;
-//
-//         if event::poll(std::time::Duration::from_millis(100))? {
-//             if let event::Event::Key(key) = event::read()? {
-//                 if key.kind == KeyEventKind::Press && (key.code == KeyCode::Char('q') || key.code == KeyCode::Char('Q')) {
-//                     break;
-//                 }
-//             }
-//         }
-//     }
-//
-//     stderr().execute(LeaveAlternateScreen)?;
-//     disable_raw_mode()?;
-//     Ok(())
-// }
-
-
-
-
-
-
-//
-//     // restore terminal
-//     disable_raw_mode()?;
-//     execute!(
-//         terminal.backend_mut(),
-//         LeaveAlternateScreen,
-//         DisableMouseCapture
-//     )?;
-//     terminal.show_cursor()?;
-//
-//     if let Err(err) = res {
-//         eprintln!("{:?}", err)
-//     }
-//
-//     Ok(())
-// }
-//
 async fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     mut app: App<'_>,
@@ -266,7 +221,6 @@ async fn run_app<B: Backend>(
         let timeout = tick_rate
             .checked_sub(last_tick.elapsed())
             .unwrap_or_else(|| Duration::from_secs(0));
-        error!("Before crossterm poll...");
         if crossterm::event::poll(timeout)? {
             // different keys depending on which browser tab
             if let Event::Key(key) = event::read()? {
@@ -339,7 +293,6 @@ async fn run_app<B: Backend>(
                 }
             }
         }
-        error!("After crossterm poll...");
         if last_tick.elapsed() >= tick_rate {
             last_tick = Instant::now();
         }

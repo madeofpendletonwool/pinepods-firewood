@@ -24,3 +24,4 @@ bincode = "1.3.3"
 anyhow = "1.0.75"
 log = "0.4"
 env_logger = { version = "0.10.0", features = [] }
+dirs = "5.0.1"
