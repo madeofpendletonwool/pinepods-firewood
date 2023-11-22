@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use reqwest;
 use tokio;
 use anyhow::{Result, anyhow};
@@ -13,6 +14,7 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use super::models;
 use log::error;
+use std::error::Error;
 
 #[derive(Debug)]
 pub enum PinepodsError {
@@ -36,6 +38,50 @@ impl From<serde_json::Error> for PinepodsError {
 pub struct PinepodsConfig {
     pub url: String,
     pub api_key: String
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EpisodeRequest {
+    pub user_id: i32,
+    pub title: String,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PinepodsPodcasts {
+    pub PodcastName: String,
+    pub ArtworkURL: String,
+    pub Author: String,
+    pub Categories: String,
+    pub EpisodeCount: String,
+    pub FeedURL: String,
+    pub WebsiteURL: String,
+    pub Description: String, // Consider adding this field
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PinepodsEpisodes {
+    pub EpisodeID: String,
+    pub PodcastID: String,
+    pub EpisodeTitle: String,
+    pub EpisodeDescription: String,
+    pub EpisodeURL: String,
+    pub EpisodeArtwork: String,
+    pub EpisodePubDate: String,
+    pub EpisodeDuration: String,
+}
+
+// Temporary struct to match the JSON response
+#[derive(Debug, Deserialize)]
+struct TempPodcast {
+    PodcastName: String,
+    ArtworkURL: String,
+    Description: String, // Add this field if needed in your struct
+    EpisodeCount: u32,
+    WebsiteURL: String,
+    FeedURL: String,
+    Author: String,
+    Categories: String,
 }
 
 async fn verify_existing_key(hostname: &String, api_key: &String) -> Result<models::PinepodsUserResponse, PinepodsError> {
@@ -191,24 +237,55 @@ impl ReqwestValues {
         }
     }
 
-    pub async fn return_pods(&self) -> Result<Vec<Value>> {
-        error!("in return pods...");
+    pub async fn return_pods(&self) -> anyhow::Result<Vec<PinepodsPodcasts>> {
         let client = reqwest::Client::new();
         let response = client
-            .get(&format!("{}/api/data/return_pods/{}", &self.url, &self.user_id)) // Format the URL
-            .header("Api-Key", &self.api_key.trim().to_string()) // Add the API key to the headers
+            .get(&format!("{}/api/data/return_pods/{}", &self.url, &self.user_id))
+            .header("Api-Key", &self.api_key.trim().to_string())
             .send()
             .await?;
 
         if response.status().is_success() {
-            let json: Value = response.json().await?;
-            Ok(json["pods"].as_array().cloned().unwrap_or_default())
+            let temp_response: HashMap<String, Vec<TempPodcast>> = response.json().await?;
+            // Bind the empty vector to a variable
+            let empty_vec = vec![];
+            let temp_podcasts = temp_response.get("pods").unwrap_or(&empty_vec);
+
+            let podcasts = temp_podcasts.iter().map(|temp_pod| {
+                PinepodsPodcasts {
+                    PodcastName: temp_pod.PodcastName.clone(),
+                    ArtworkURL: temp_pod.ArtworkURL.clone(),
+                    Author: temp_pod.Author.clone(),
+                    Categories: temp_pod.Categories.clone(),
+                    EpisodeCount: temp_pod.EpisodeCount.to_string(),
+                    FeedURL: temp_pod.FeedURL.clone(),
+                    WebsiteURL: temp_pod.WebsiteURL.clone(),
+                    Description: temp_pod.Description.clone(), // Map this if you added it
+                }
+            }).collect();
+
+            Ok(podcasts)
         } else {
-            eprintln!(
-                "Error fetching podcasts: {}",
-                response.status()
-            );
             Err(anyhow!("Error Fetching pods"))
         }
     }
+
+
+    pub async fn return_eps(&self, episode_request: EpisodeRequest) -> anyhow::Result<Vec<PinepodsEpisodes>> {
+    //     let client = reqwest::Client::new();
+    //     let response = client
+    //         .post(&format!("{}/api/data/return_selected_episode", &self.url))
+    //         .header("Api-Key", &self.api_key.trim().to_string())
+    //         .json(&episode_request)
+    //         .send()
+    //         .await?;
+    //
+    //     if response.status().is_success() {
+    //         let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
+    //         let episodes = json.get("episode_info").cloned().unwrap_or_default();
+    //         Ok(episodes)
+    //     } else {
+    //         Err(anyhow!("Error fetching episodes"))
+    //     }
+    // }
 }

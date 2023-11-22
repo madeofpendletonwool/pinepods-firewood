@@ -10,6 +10,7 @@ use glob::{glob_with, MatchOptions};
 use lofty::{Accessor, Probe, TaggedFileExt};
 
 use log::error;
+use crate::requests::PinepodsPodcasts;
 
 // converts queue items to what's displayed for user
 pub fn audio_display(path: &PathBuf) -> String {
@@ -36,35 +37,24 @@ pub fn audio_display(path: &PathBuf) -> String {
 }
 
 // scans folder for valid files, returns matches
-pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestValues>>) -> Vec<String> {
-    let mut podcast_names = Vec::new();
-
+pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestValues>>) -> Vec<PinepodsPodcasts> {
     error!("before lock...");
 
-    let podcasts = {
+    let result = {
         let pinepods_locked = pinepods_values.lock().expect("Lock is poisoned!");
         pinepods_locked.return_pods().await
     };
 
-    match podcasts {
-        Ok(pods) => {
+    match result {
+        Ok(podcasts) => {
             error!("pods return finished...");
-            for podcast in pods.iter() {
-                if let Some(podcast_name) = podcast["PodcastName"].as_str() {
-                    podcast_names.push(podcast_name.to_owned());
-                }
-            }
+            podcasts
         },
         Err(e) => {
             eprintln!("Request failed: {:?}", e);
-            return podcast_names; // return empty list on error
+            Vec::new() // return empty list on error
         }
-    };
-
-
-    error!("after lock...");
-
-    podcast_names
+    }
 }
 
 pub fn display_podcast_details(podcast: &serde_json::Value) {

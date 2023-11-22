@@ -13,6 +13,7 @@ use pinepods_firewood::queue::Queue;
 use pinepods_firewood::stateful_list::StatefulList;
 use pinepods_firewood::stateful_table::StatefulTable;
 use pinepods_firewood::helpers::requests::ReqwestValues;
+use pinepods_firewood::requests::PinepodsPodcasts;
 
 #[derive(Clone, Copy)]
 pub enum InputMode {
@@ -39,8 +40,14 @@ impl AppTab {
     }
 }
 
+enum ContentState {
+    PodcastMode { feed_url: String },
+    EpisodeMode { ep_url: String },
+    PlayingEpisode,
+}
+
 pub struct App<'a> {
-    pub browser_items: StatefulList<String>,
+    pub browser_items: StatefulList<PinepodsPodcasts>,
     pub queue_items: Queue,
     pub control_table: StatefulTable<'a>,
     pub music_handle: MusicHandle,
@@ -48,6 +55,7 @@ pub struct App<'a> {
     pub titles: Vec<&'a str>,
     pub active_tab: AppTab,
     pub pinepods_values: Arc<Mutex<ReqwestValues>>,
+    pub content_state: ContentState,
 }
 
 impl<'a> App<'a> {
@@ -86,7 +94,23 @@ impl<'a> App<'a> {
 
     // if item selected is folder, enter folder, else play record.
     pub async fn evaluate(&mut self) {
+        match self.content_state {
+            ContentState::BrowsingPodcasts => {
+                // Handle podcast selection
+                let selected_podcast = self.browser_items.item()/* logic to get the selected podcast */;
+                let feed_url = selected_podcast.FeedURL.clone();
+                self.content_state = ContentState::ViewingEpisodes { feed_url };
+                // Load episodes from the feed URL
+            },
+            ContentState::ViewingEpisodes { ref feed_url } => {
+                // Handle episode selection
+                let selected_episode = /* logic to get the selected episode */;
+                // Play the selected episode
+                // If necessary, you can change state back to BrowsingPodcasts or keep it in ViewingEpisodes
+            },
         let join = self.selected_item();
+        println!("{}", join.to_str().unwrap());
+
         // if folder enter, else play song
         if join.is_dir() {
             env::set_current_dir(join).unwrap();
@@ -140,13 +164,7 @@ impl<'a> App<'a> {
     }
 
     // get file path
-    pub fn selected_item(&self) -> PathBuf {
-        let current_dir = env::current_dir().unwrap();
-        if self.browser_items.empty() {
-            Path::new(&current_dir).into()
-        } else {
-            let join = Path::join(&current_dir, Path::new(&self.browser_items.item()));
-            join
-        }
+    pub fn selected_item(&self) -> Option<&PinepodsPodcasts> {
+        self.browser_items.item()
     }
 }

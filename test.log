@@ -1,0 +1,78 @@
+   Compiling pinepods_firewood v0.1.0 (/home/collinp/Documents/GitHub/pinepods-firewood)
+warning: unused imports: `MatchOptions`, `glob_with`
+ --> src/helpers/gen_funcs.rs:9:12
+  |
+9 | use glob::{glob_with, MatchOptions};
+  |            ^^^^^^^^^  ^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `Path`
+ --> src/helpers/requests.rs:8:26
+  |
+8 | use std::path::{Display, Path, PathBuf};
+  |                          ^^^^
+
+warning: unused import: `std::pin::pin`
+  --> src/helpers/requests.rs:10:5
+   |
+10 | use std::pin::pin;
+   |     ^^^^^^^^^^^^^
+
+warning: the item `Path` is imported redundantly
+   --> src/helpers/requests.rs:176:17
+    |
+8   | use std::path::{Display, Path, PathBuf};
+    |                          ---- the item `Path` is already imported here
+...
+176 |             use std::path::Path;
+    |                 ^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::Path`
+   --> src/helpers/requests.rs:176:17
+    |
+176 |             use std::path::Path;
+    |                 ^^^^^^^^^^^^^^^
+
+error[E0608]: cannot index into a value of type `&PinepodsPodcasts`
+  --> src/helpers/gen_funcs.rs:53:45
+   |
+53 |                 if let Some(podcast_name) = podcast["PodcastName"].as_str() {
+   |                                             ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `data`
+   --> src/helpers/requests.rs:126:16
+    |
+126 |             Ok(data) => {}
+    |                ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `data`
+   --> src/helpers/requests.rs:127:17
+    |
+127 |             Err(data) => {}
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: variable does not need to be mutable
+   --> src/helpers/requests.rs:116:13
+    |
+116 |         let mut config_path = app_path.join("pinepods_config.json");
+    |             ----^^^^^^^^^^^
+    |             |
+    |             help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+error[E0277]: the trait bound `anyhow::Error: StdError` is not satisfied
+   --> src/helpers/requests.rs:260:17
+    |
+260 |             Err(Box::new(anyhow!("Error Fetching pods")))
+    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StdError` is not implemented for `anyhow::Error`
+    |
+    = note: required for the cast from `Box<anyhow::Error>` to `Box<dyn StdError>`
+
+Some errors have detailed explanations: E0277, E0608.
+For more information about an error, try `rustc --explain E0277`.
+warning: `pinepods_firewood` (lib) generated 8 warnings
+error: could not compile `pinepods_firewood` (lib) due to 2 previous errors; 8 warnings emitted
