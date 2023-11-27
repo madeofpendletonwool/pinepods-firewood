@@ -49,26 +49,31 @@ pub struct EpisodeRequest {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PinepodsPodcasts {
+    pub PodcastID: i64,  // Assuming integers, change to i32 if the range is smaller
     pub PodcastName: String,
     pub ArtworkURL: String,
     pub Author: String,
-    pub Categories: String,
-    pub EpisodeCount: String,
+    pub Categories: String, // Change to Vec<String> if it's actually a JSON array
+    pub EpisodeCount: i64, // Assuming integers
     pub FeedURL: String,
     pub WebsiteURL: String,
-    pub Description: String, // Consider adding this field
+    pub Description: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PinepodsEpisodes {
-    pub EpisodeID: String,
-    pub PodcastID: String,
+    pub PodcastName: Option<String>, // Optional if it might not always be present
     pub EpisodeTitle: String,
-    pub EpisodeDescription: String,
-    pub EpisodeURL: String,
-    pub EpisodeArtwork: String,
     pub EpisodePubDate: String,
-    pub EpisodeDuration: String,
+    pub EpisodeDescription: String,
+    pub EpisodeArtwork: String,
+    pub EpisodeURL: String,
+    pub EpisodeDuration: i64, // Assuming this is an integer value for duration in seconds
+    // Optional fields
+    pub ListenDuration: Option<i64>, // Assuming this is an integer value for listened duration in seconds
+    // If you still need EpisodeID and PodcastID, you can include them as optional
+    pub EpisodeID: Option<String>,
+    pub PodcastID: Option<String>,
 }
 
 // Temporary struct to match the JSON response
@@ -82,6 +87,7 @@ struct TempPodcast {
     FeedURL: String,
     Author: String,
     Categories: String,
+    PodcastID:
 }
 
 async fn verify_existing_key(hostname: &String, api_key: &String) -> Result<models::PinepodsUserResponse, PinepodsError> {
@@ -253,6 +259,7 @@ impl ReqwestValues {
 
             let podcasts = temp_podcasts.iter().map(|temp_pod| {
                 PinepodsPodcasts {
+                    PodcastID: temp_pod.PodcastID.clone(),
                     PodcastName: temp_pod.PodcastName.clone(),
                     ArtworkURL: temp_pod.ArtworkURL.clone(),
                     Author: temp_pod.Author.clone(),
@@ -271,21 +278,25 @@ impl ReqwestValues {
     }
 
 
-    pub async fn return_eps(&self, episode_request: EpisodeRequest) -> anyhow::Result<Vec<PinepodsEpisodes>> {
-    //     let client = reqwest::Client::new();
-    //     let response = client
-    //         .post(&format!("{}/api/data/return_selected_episode", &self.url))
-    //         .header("Api-Key", &self.api_key.trim().to_string())
-    //         .json(&episode_request)
-    //         .send()
-    //         .await?;
-    //
-    //     if response.status().is_success() {
-    //         let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
-    //         let episodes = json.get("episode_info").cloned().unwrap_or_default();
-    //         Ok(episodes)
-    //     } else {
-    //         Err(anyhow!("Error fetching episodes"))
-    //     }
-    // }
+    pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> anyhow::Result<Vec<PinepodsEpisodes>> {
+        let client = reqwest::Client::new();
+        let request_body = EpisodeRequestBody {
+            podcast_id: podcast_data.PodcastID,  // Assuming PodcastID is of type i64
+            user_id: self.user_id,
+        };
+        let response = client
+            .post(&format!("{}/api/data/podcast_episodes", &self.url))
+            .header("Api-Key", &self.api_key.trim().to_string())
+            .json(&request_body)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
+            let episodes = json.get("episode_info").cloned().unwrap_or_default();
+            Ok(episodes)
+        } else {
+            Err(anyhow!("Error fetching episodes"))
+        }
+    }
 }
