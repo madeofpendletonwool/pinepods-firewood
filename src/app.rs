@@ -94,15 +94,20 @@ impl<'a> App<'a> {
 
     // if item selected is folder, enter folder, else play record.
     pub async fn evaluate(&mut self) {
-        match self.content_state {
-            ContentState::BrowsingPodcasts => {
+        match &self.content_state {
+            ContentState::PodcastMode => {
                 // Handle podcast selection
                 let selected_podcast = self.browser_items.item()/* logic to get the selected podcast */;
-                let feed_url = selected_podcast.FeedURL.clone();
-                self.content_state = ContentState::ViewingEpisodes { feed_url };
-                // Load episodes from the feed URL
+                let podcast_id = selected_podcast.PodcastID.clone();
+                self.content_state = ContentState::ViewingEpisodes { podcast_id };
+                // Load episodes from the Podcast ID
+                let mut pinepods_values = self.pinepods_values.lock().unwrap();
+                match pinepods_values.return_eps(selected_podcast).await {
+                    Ok(episodes) => println!("Episodes: {:?}", episodes),
+                    Err(e) => eprintln!("Error fetching episodes: {:?}", e),
+                }
             },
-            ContentState::ViewingEpisodes { ref feed_url } => {
+            ContentState::EpisodeMode { ref podcast_id } => {
                 // Handle episode selection
                 let selected_episode = /* logic to get the selected episode */;
                 // Play the selected episode
