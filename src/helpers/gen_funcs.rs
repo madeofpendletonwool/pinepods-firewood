@@ -13,7 +13,7 @@ use log::error;
 use crate::requests::PinepodsPodcasts;
 
 // converts queue items to what's displayed for user
-pub fn audio_display(path: &PathBuf) -> String {
+pub fn audio_display(path: &String) -> String {
     let path = Path::new(&path);
     let tagged_file = Probe::open(path)
         .expect("ERROR: Bad path provided!")

@@ -42,9 +42,8 @@ pub struct PinepodsConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EpisodeRequest {
-    pub user_id: i32,
-    pub title: String,
-    pub url: String,
+    pub user_id: i64,
+    pub podcast_id: i64
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,13 +53,13 @@ pub struct PinepodsPodcasts {
     pub ArtworkURL: String,
     pub Author: String,
     pub Categories: String, // Change to Vec<String> if it's actually a JSON array
-    pub EpisodeCount: i64, // Assuming integers
+    pub EpisodeCount: u32, // Assuming integers
     pub FeedURL: String,
     pub WebsiteURL: String,
     pub Description: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PinepodsEpisodes {
     pub PodcastName: Option<String>, // Optional if it might not always be present
     pub EpisodeTitle: String,
@@ -87,7 +86,7 @@ struct TempPodcast {
     FeedURL: String,
     Author: String,
     Categories: String,
-    PodcastID:
+    PodcastID: i64,
 }
 
 async fn verify_existing_key(hostname: &String, api_key: &String) -> Result<models::PinepodsUserResponse, PinepodsError> {
@@ -264,7 +263,7 @@ impl ReqwestValues {
                     ArtworkURL: temp_pod.ArtworkURL.clone(),
                     Author: temp_pod.Author.clone(),
                     Categories: temp_pod.Categories.clone(),
-                    EpisodeCount: temp_pod.EpisodeCount.to_string(),
+                    EpisodeCount: temp_pod.EpisodeCount,
                     FeedURL: temp_pod.FeedURL.clone(),
                     WebsiteURL: temp_pod.WebsiteURL.clone(),
                     Description: temp_pod.Description.clone(), // Map this if you added it
@@ -280,7 +279,7 @@ impl ReqwestValues {
 
     pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> anyhow::Result<Vec<PinepodsEpisodes>> {
         let client = reqwest::Client::new();
-        let request_body = EpisodeRequestBody {
+        let request_body = EpisodeRequest {
             podcast_id: podcast_data.PodcastID,  // Assuming PodcastID is of type i64
             user_id: self.user_id,
         };
@@ -293,10 +292,13 @@ impl ReqwestValues {
 
         if response.status().is_success() {
             let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
-            let episodes = json.get("episode_info").cloned().unwrap_or_default();
+            let episodes = json.get("episode_info").cloned().unwrap_or_else(Vec::new);
+
             Ok(episodes)
         } else {
             Err(anyhow!("Error fetching episodes"))
         }
     }
+
+
 }
