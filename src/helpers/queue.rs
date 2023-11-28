@@ -11,7 +11,7 @@ use super::constants::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
 
 pub struct Queue {
     state: ListState,
-    items: VecDeque<PathBuf>,
+    items: VecDeque<String>,
     curr: usize,
     total_time: u32,
 }
@@ -27,7 +27,7 @@ impl Queue {
     }
 
     // return item at index
-    pub fn item(&self) -> Option<&PathBuf> {
+    pub fn item(&self) -> Option<&String> {
         if self.items.is_empty() {
             None
         } else {
@@ -36,7 +36,7 @@ impl Queue {
     }
 
     // return all items contained in vector
-    pub fn items(&self) -> &VecDeque<PathBuf> {
+    pub fn items(&self) -> &VecDeque<String> {
         &self.items
     }
 
@@ -94,7 +94,7 @@ impl Queue {
         self.items.is_empty()
     }
 
-    pub fn pop(&mut self) -> PathBuf {
+    pub fn pop(&mut self) -> String {
         self.decrement_total_time();
         self.items.pop_front().unwrap()
     }
@@ -110,7 +110,7 @@ impl Queue {
     }
 
     // get audio file length
-    pub fn item_length(&mut self, path: &PathBuf) -> u32 {
+    pub fn item_length(&mut self, path: &String) -> u32 {
         let path = Path::new(&path);
         let tagged_file = Probe::open(path)
             .expect("ERROR: Bad path provided!")
@@ -167,19 +167,15 @@ impl Queue {
         self.state.select(None);
     }
 
-    pub fn add(&mut self, item: PathBuf) {
-        if item.is_dir() {
-            let files = bulk_add(&item);
-            for f in files {
-                let length = self.item_length(&f);
-                self.total_time += length;
-                self.items.push_back(f);
-            }
-        } else {
-            self.total_time += self.item_length(&item);
-            self.items.push_back(item);
-        }
+    pub fn add(&mut self, episode_url: String, episode_duration: i64) {
+        // Add the episode URL to the queue
+        self.items.push_back(episode_url);
+
+        // Update the total time of the queue
+        self.total_time += episode_duration as u32;
     }
+
+
 
     // remove item from items vector
     pub fn remove(&mut self) {

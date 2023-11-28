@@ -7,7 +7,7 @@ use std::{
     time,
     time::{Duration, Instant},
 };
-use app::{App, AppTab, InputMode};
+use app::{App, AppTab, InputMode, SelectedItem, BrowserItem};
 use std::fmt::format;
 use std::thread::sleep;
 use serde::Deserialize;
@@ -230,7 +230,11 @@ async fn run_app<B: Backend>(
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('p') | KeyCode::Char(' ') => app.music_handle.play_pause(),
                         KeyCode::Char('g') => app.music_handle.skip(),
-                        KeyCode::Char('a') => app.queue_items.add(app.selected_item()),
+                        KeyCode::Char('a') => {
+                            if let Some(SelectedItem::Episode(episode)) = app.selected_item() {
+                                app.queue_items.add(episode.EpisodeURL.clone(), episode.EpisodeDuration);
+                            }
+                        }
                         KeyCode::Enter => app.evaluate().await,
                         KeyCode::Backspace => app.backpedal().await,
                         KeyCode::Down | KeyCode::Char('j') => app.browser_items.next(),
@@ -369,8 +373,25 @@ fn music_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Confi
         .browser_items
         .items()
         .iter()
-        .map(|i| ListItem::new(Text::from(i.to_owned())))
+        .map(|browser_item| {
+            let text = match browser_item {
+                BrowserItem::Podcast(podcast) => {
+                    // Create a string representation for the podcast
+                    // For example, using the podcast title
+                    podcast.PodcastName.clone()
+                },
+                BrowserItem::Episode(episode) => {
+                    // Create a string representation for the episode
+                    // For example, using the episode title
+                    episode.EpisodeTitle.clone()
+                }
+            };
+
+            // Convert the string to Text
+            ListItem::new(Text::from(text))
+        })
         .collect();
+
     // println!("{:?}", &items);
 
     // Create a List from all list items and highlight the currently selected one // RENDER 1

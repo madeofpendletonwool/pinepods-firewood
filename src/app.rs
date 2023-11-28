@@ -13,7 +13,7 @@ use pinepods_firewood::queue::Queue;
 use pinepods_firewood::stateful_list::StatefulList;
 use pinepods_firewood::stateful_table::StatefulTable;
 use pinepods_firewood::helpers::requests::ReqwestValues;
-use pinepods_firewood::requests::PinepodsPodcasts;
+use pinepods_firewood::requests::{PinepodsEpisodes, PinepodsPodcasts};
 
 #[derive(Clone, Copy)]
 pub enum InputMode {
@@ -40,14 +40,25 @@ impl AppTab {
     }
 }
 
-enum ContentState {
+pub enum ContentState {
     PodcastMode { feed_url: String },
-    EpisodeMode { ep_url: String },
-    PlayingEpisode,
+    EpisodeMode { podcast_id: i64 },
+    PlayingEpisode { ep_url: String }
 }
 
+pub enum BrowserItem {
+    Podcast(PinepodsPodcasts),
+    Episode(PinepodsEpisodes),
+}
+
+pub enum SelectedItem<'a> {
+    Podcast(&'a PinepodsPodcasts),
+    Episode(&'a PinepodsEpisodes),
+}
+
+
 pub struct App<'a> {
-    pub browser_items: StatefulList<PinepodsPodcasts>,
+    pub browser_items: StatefulList<BrowserItem>,
     pub queue_items: Queue,
     pub control_table: StatefulTable<'a>,
     pub music_handle: MusicHandle,
@@ -60,15 +71,23 @@ pub struct App<'a> {
 
 impl<'a> App<'a> {
     pub async fn new(pinepods_values: Arc<Mutex<ReqwestValues>>) -> App<'a> {
+        let podcasts = gen_funcs::scan_folder(&pinepods_values).await;
+        let podcast_items = podcasts.into_iter()
+            .map(BrowserItem::Podcast)
+            .collect();
+
         App {
-            browser_items: StatefulList::with_items(gen_funcs::scan_folder(&pinepods_values).await),
+            browser_items: StatefulList::with_items(podcast_items),
             queue_items: Queue::with_items(),
             control_table: StatefulTable::new(),
             music_handle: MusicHandle::new(),
             input_mode: InputMode::Browser,
             titles: vec!["Podcasts", "Controls"],
             active_tab: AppTab::Music,
-            pinepods_values
+            pinepods_values,
+            content_state: ContentState::PodcastMode {
+                feed_url: String::from("some_feed_url"), // Replace with an actual URL or appropriate default value
+            },
         }
     }
 
@@ -95,41 +114,48 @@ impl<'a> App<'a> {
     // if item selected is folder, enter folder, else play record.
     pub async fn evaluate(&mut self) {
         match &self.content_state {
-            ContentState::PodcastMode => {
-                // Handle podcast selection
-                let selected_podcast = self.browser_items.item()/* logic to get the selected podcast */;
+            ContentState::PodcastMode {feed_url} => {
+                let selected_podcast = match self.browser_items.item() {
+                    BrowserItem::Podcast(p) => p,
+                    _ => return, // or handle error if necessary
+                };
                 let podcast_id = selected_podcast.PodcastID.clone();
-                self.content_state = ContentState::ViewingEpisodes { podcast_id };
-                // Load episodes from the Podcast ID
+                self.content_state = ContentState::EpisodeMode { podcast_id: podcast_id.clone() };
+
                 let mut pinepods_values = self.pinepods_values.lock().unwrap();
                 match pinepods_values.return_eps(selected_podcast).await {
-                    Ok(episodes) => println!("Episodes: {:?}", episodes),
+                    Ok(episodes) => {
+                        let episode_items = episodes.into_iter()
+                            .map(BrowserItem::Episode)
+                            .collect();
+                        self.browser_items = StatefulList::with_items(episode_items);
+                    },
                     Err(e) => eprintln!("Error fetching episodes: {:?}", e),
                 }
             },
-            ContentState::EpisodeMode { ref podcast_id } => {
-                // Handle episode selection
-                let selected_episode = /* logic to get the selected episode */;
-                // Play the selected episode
-                // If necessary, you can change state back to BrowsingPodcasts or keep it in ViewingEpisodes
+            ContentState::EpisodeMode { podcast_id } => {
+                let selected_episode = match self.browser_items.item() {
+                    BrowserItem::Episode(e) => e,
+                    _ => return, // or handle error if necessary
+                };
+                // Logic to handle episode selection and playback
+                // For example, change state to PlayingEpisode or perform other actions
             },
-        let join = self.selected_item();
-        println!("{}", join.to_str().unwrap());
-
-        // if folder enter, else play song
-        if join.is_dir() {
-            env::set_current_dir(join).unwrap();
-            self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values).await);
-            self.browser_items.next();
-        } else {
-            self.music_handle.play(join);
+            _ => {
+                // Handle other states, like PlayingEpisode
+            }
         }
     }
-
-    // cd into selected directory
     pub async fn backpedal(&mut self) {
-        env::set_current_dir("../").unwrap();
-        self.browser_items = StatefulList::with_items(gen_funcs::scan_folder(&self.pinepods_values).await);
+
+        // Fetch the podcasts and wrap them as BrowserItem
+        let podcasts = gen_funcs::scan_folder(&self.pinepods_values).await;
+        let podcast_items = podcasts.into_iter()
+            .map(BrowserItem::Podcast)
+            .collect();
+
+        // Update the browser_items with the new list
+        self.browser_items = StatefulList::with_items(podcast_items);
         self.browser_items.next();
     }
 
@@ -168,8 +194,12 @@ impl<'a> App<'a> {
         }
     }
 
+
     // get file path
-    pub fn selected_item(&self) -> Option<&PinepodsPodcasts> {
-        self.browser_items.item()
+    pub fn selected_item(&self) -> Option<SelectedItem> {
+        match self.browser_items.item() {
+            BrowserItem::Podcast(podcast) => Some(SelectedItem::Podcast(podcast)),
+            BrowserItem::Episode(episode) => Some(SelectedItem::Episode(episode)),
+        }
     }
 }

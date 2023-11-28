@@ -57,12 +57,12 @@ impl MusicHandle {
         *self.time_played.lock().unwrap() = t;
     }
     // set currently playing song
-    pub fn set_currently_playing(&mut self, path: &PathBuf) {
+    pub fn set_currently_playing(&mut self, path: &String) {
         self.currently_playing = gen_funcs::audio_display(path);
     }
 
     // update current song and play
-    pub fn play(&mut self, path: PathBuf) {
+    pub fn play(&mut self, path: String) {
         // if song already playing, need to be able to restart tho
         self.sink.stop();
         *self.time_played.lock().unwrap() = 0;
@@ -70,10 +70,6 @@ impl MusicHandle {
         // set currently playing
         self.currently_playing = path
             .clone()
-            .file_name()
-            .unwrap()
-            .to_str()
-            .unwrap()
             .to_string();
         self.set_currently_playing(&path);
         self.update_song_length(&path);
@@ -125,7 +121,7 @@ impl MusicHandle {
     }
 
     /// Update `self.song_length` with the provided file.
-    pub fn update_song_length(&mut self, path: &PathBuf) {
+    pub fn update_song_length(&mut self, path: &String) {
         let path = Path::new(&path);
         let tagged_file = Probe::open(path)
             .expect("ERROR: Bad path provided!")
