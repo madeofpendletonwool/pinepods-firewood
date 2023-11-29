@@ -213,7 +213,6 @@ async fn run_app<B: Backend>(
     cfg: Config,
     tick_rate: Duration,
 ) -> io::Result<()> {
-    error!("in run_app...");
     let mut last_tick = Instant::now();
     loop {
         terminal.draw(|f| ui::<B>(f, &mut app, &cfg))?;
@@ -391,8 +390,6 @@ fn music_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Confi
             ListItem::new(Text::from(text))
         })
         .collect();
-
-    // println!("{:?}", &items);
 
     // Create a List from all list items and highlight the currently selected one // RENDER 1
     let items = List::new(items)
