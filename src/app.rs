@@ -72,9 +72,11 @@ pub struct App<'a> {
 impl<'a> App<'a> {
     pub async fn new(pinepods_values: Arc<Mutex<ReqwestValues>>) -> App<'a> {
         let podcasts = gen_funcs::scan_folder(&pinepods_values).await;
+        error!("Fetched podcasts: {:?}", podcasts);
         let podcast_items = podcasts.into_iter()
             .map(BrowserItem::Podcast)
             .collect();
+
 
         App {
             browser_items: StatefulList::with_items(podcast_items),

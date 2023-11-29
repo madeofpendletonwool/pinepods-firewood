@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::collections::HashMap;
 use reqwest;
 use tokio;
@@ -71,8 +72,8 @@ pub struct PinepodsEpisodes {
     // Optional fields
     pub ListenDuration: Option<i64>, // Assuming this is an integer value for listened duration in seconds
     // If you still need EpisodeID and PodcastID, you can include them as optional
-    pub EpisodeID: Option<String>,
-    pub PodcastID: Option<String>,
+    pub EpisodeID: Option<i64>,
+    pub PodcastID: Option<i64>,
 }
 
 // Temporary struct to match the JSON response
@@ -278,22 +279,24 @@ impl ReqwestValues {
 
 
     pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> anyhow::Result<Vec<PinepodsEpisodes>> {
+        error!("return eps1");
         let client = reqwest::Client::new();
         let request_body = EpisodeRequest {
             podcast_id: podcast_data.PodcastID,  // Assuming PodcastID is of type i64
             user_id: self.user_id,
         };
+        error!("return eps2");
         let response = client
             .post(&format!("{}/api/data/podcast_episodes", &self.url))
             .header("Api-Key", &self.api_key.trim().to_string())
             .json(&request_body)
             .send()
             .await?;
-
+        error!("return eps3");
         if response.status().is_success() {
             let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
             let episodes = json.get("episode_info").cloned().unwrap_or_else(Vec::new);
-
+            error!("return eps2");
             Ok(episodes)
         } else {
             Err(anyhow!("Error fetching episodes"))

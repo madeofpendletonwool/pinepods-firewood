@@ -7,72 +7,487 @@ warning: unused imports: `MatchOptions`, `glob_with`
   |
   = note: `#[warn(unused_imports)]` on by default
 
-warning: unused import: `Path`
- --> src/helpers/requests.rs:8:26
+warning: unused import: `PathBuf`
+ --> src/helpers/music_handler.rs:4:18
   |
-8 | use std::path::{Display, Path, PathBuf};
+4 |     path::{Path, PathBuf},
+  |                  ^^^^^^^
+
+warning: unused import: `PathBuf`
+ --> src/helpers/queue.rs:3:18
+  |
+3 |     path::{Path, PathBuf},
+  |                  ^^^^^^^
+
+warning: unused import: `super::gen_funcs::bulk_add`
+ --> src/helpers/queue.rs:9:5
+  |
+9 | use super::gen_funcs::bulk_add;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::any::Any`
+ --> src/helpers/requests.rs:1:5
+  |
+1 | use std::any::Any;
+  |     ^^^^^^^^^^^^^
+
+warning: unused import: `Path`
+ --> src/helpers/requests.rs:9:26
+  |
+9 | use std::path::{Display, Path, PathBuf};
   |                          ^^^^
 
 warning: unused import: `std::pin::pin`
-  --> src/helpers/requests.rs:10:5
+  --> src/helpers/requests.rs:11:5
    |
-10 | use std::pin::pin;
+11 | use std::pin::pin;
    |     ^^^^^^^^^^^^^
 
+warning: unused import: `std::error::Error`
+  --> src/helpers/requests.rs:18:5
+   |
+18 | use std::error::Error;
+   |     ^^^^^^^^^^^^^^^^^
+
 warning: the item `Path` is imported redundantly
-   --> src/helpers/requests.rs:176:17
+   --> src/helpers/requests.rs:189:17
     |
-8   | use std::path::{Display, Path, PathBuf};
+9   | use std::path::{Display, Path, PathBuf};
     |                          ---- the item `Path` is already imported here
 ...
-176 |             use std::path::Path;
+189 |             use std::path::Path;
     |                 ^^^^^^^^^^^^^^^
 
 warning: unused import: `std::path::Path`
-   --> src/helpers/requests.rs:176:17
+   --> src/helpers/requests.rs:189:17
     |
-176 |             use std::path::Path;
+189 |             use std::path::Path;
     |                 ^^^^^^^^^^^^^^^
 
-error[E0608]: cannot index into a value of type `&PinepodsPodcasts`
-  --> src/helpers/gen_funcs.rs:53:45
-   |
-53 |                 if let Some(podcast_name) = podcast["PodcastName"].as_str() {
-   |                                             ^^^^^^^^^^^^^^^^^^^^^^
-
 warning: unused variable: `data`
-   --> src/helpers/requests.rs:126:16
+   --> src/helpers/requests.rs:139:16
     |
-126 |             Ok(data) => {}
+139 |             Ok(data) => {}
     |                ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
     |
     = note: `#[warn(unused_variables)]` on by default
 
 warning: unused variable: `data`
-   --> src/helpers/requests.rs:127:17
+   --> src/helpers/requests.rs:140:17
     |
-127 |             Err(data) => {}
+140 |             Err(data) => {}
     |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
 
 warning: variable does not need to be mutable
-   --> src/helpers/requests.rs:116:13
+   --> src/helpers/requests.rs:129:13
     |
-116 |         let mut config_path = app_path.join("pinepods_config.json");
+129 |         let mut config_path = app_path.join("pinepods_config.json");
     |             ----^^^^^^^^^^^
     |             |
     |             help: remove this `mut`
     |
     = note: `#[warn(unused_mut)]` on by default
 
-error[E0277]: the trait bound `anyhow::Error: StdError` is not satisfied
-   --> src/helpers/requests.rs:260:17
+warning: function `create_app_path` is never used
+   --> src/helpers/requests.rs:122:4
     |
-260 |             Err(Box::new(anyhow!("Error Fetching pods")))
-    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the trait `StdError` is not implemented for `anyhow::Error`
+122 | fn create_app_path(app_path: &Display) -> std::io::Result<()> {
+    |    ^^^^^^^^^^^^^^^
     |
-    = note: required for the cast from `Box<anyhow::Error>` to `Box<dyn StdError>`
+    = note: `#[warn(dead_code)]` on by default
 
-Some errors have detailed explanations: E0277, E0608.
-For more information about an error, try `rustc --explain E0277`.
-warning: `pinepods_firewood` (lib) generated 8 warnings
-error: could not compile `pinepods_firewood` (lib) due to 2 previous errors; 8 warnings emitted
+warning: field `pinepods_instance` is never read
+ --> src/helpers/models.rs:6:16
+  |
+4 | pub struct PinepodsCheck {
+  |            ------------- field in this struct
+5 |     pub status_code: u16,
+6 |     pub(crate) pinepods_instance: bool
+  |                ^^^^^^^^^^^^^^^^^
+  |
+  = note: `PinepodsCheck` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: fields `status` and `retrieved_id` are never read
+  --> src/helpers/models.rs:11:5
+   |
+10 | pub struct PinepodsUserResponse {
+   |            -------------------- fields in this struct
+11 |     status: String,
+   |     ^^^^^^
+12 |     retrieved_id: Option<i32> // Assuming id is a u32, adjust as needed. Using Option if id might not always be present.
+   |     ^^^^^^^^^^^^
+   |
+   = note: `PinepodsUserResponse` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: structure field `PodcastID` should have a snake case name
+  --> src/helpers/requests.rs:52:9
+   |
+52 |     pub PodcastID: i64,  // Assuming integers, change to i32 if the range is smaller
+   |         ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
+   |
+   = note: `#[warn(non_snake_case)]` on by default
+
+warning: structure field `PodcastName` should have a snake case name
+  --> src/helpers/requests.rs:53:9
+   |
+53 |     pub PodcastName: String,
+   |         ^^^^^^^^^^^ help: convert the identifier to snake case: `podcast_name`
+
+warning: structure field `ArtworkURL` should have a snake case name
+  --> src/helpers/requests.rs:54:9
+   |
+54 |     pub ArtworkURL: String,
+   |         ^^^^^^^^^^ help: convert the identifier to snake case: `artwork_url`
+
+warning: structure field `Author` should have a snake case name
+  --> src/helpers/requests.rs:55:9
+   |
+55 |     pub Author: String,
+   |         ^^^^^^ help: convert the identifier to snake case: `author`
+
+warning: structure field `Categories` should have a snake case name
+  --> src/helpers/requests.rs:56:9
+   |
+56 |     pub Categories: String, // Change to Vec<String> if it's actually a JSON array
+   |         ^^^^^^^^^^ help: convert the identifier to snake case (notice the capitalization): `categories`
+
+warning: structure field `EpisodeCount` should have a snake case name
+  --> src/helpers/requests.rs:57:9
+   |
+57 |     pub EpisodeCount: u32, // Assuming integers
+   |         ^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_count`
+
+warning: structure field `FeedURL` should have a snake case name
+  --> src/helpers/requests.rs:58:9
+   |
+58 |     pub FeedURL: String,
+   |         ^^^^^^^ help: convert the identifier to snake case: `feed_url`
+
+warning: structure field `WebsiteURL` should have a snake case name
+  --> src/helpers/requests.rs:59:9
+   |
+59 |     pub WebsiteURL: String,
+   |         ^^^^^^^^^^ help: convert the identifier to snake case: `website_url`
+
+warning: structure field `Description` should have a snake case name
+  --> src/helpers/requests.rs:60:9
+   |
+60 |     pub Description: String,
+   |         ^^^^^^^^^^^ help: convert the identifier to snake case: `description`
+
+warning: structure field `PodcastName` should have a snake case name
+  --> src/helpers/requests.rs:65:9
+   |
+65 |     pub PodcastName: Option<String>, // Optional if it might not always be present
+   |         ^^^^^^^^^^^ help: convert the identifier to snake case: `podcast_name`
+
+warning: structure field `EpisodeTitle` should have a snake case name
+  --> src/helpers/requests.rs:66:9
+   |
+66 |     pub EpisodeTitle: String,
+   |         ^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_title`
+
+warning: structure field `EpisodePubDate` should have a snake case name
+  --> src/helpers/requests.rs:67:9
+   |
+67 |     pub EpisodePubDate: String,
+   |         ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_pub_date`
+
+warning: structure field `EpisodeDescription` should have a snake case name
+  --> src/helpers/requests.rs:68:9
+   |
+68 |     pub EpisodeDescription: String,
+   |         ^^^^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_description`
+
+warning: structure field `EpisodeArtwork` should have a snake case name
+  --> src/helpers/requests.rs:69:9
+   |
+69 |     pub EpisodeArtwork: String,
+   |         ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_artwork`
+
+warning: structure field `EpisodeURL` should have a snake case name
+  --> src/helpers/requests.rs:70:9
+   |
+70 |     pub EpisodeURL: String,
+   |         ^^^^^^^^^^ help: convert the identifier to snake case: `episode_url`
+
+warning: structure field `EpisodeDuration` should have a snake case name
+  --> src/helpers/requests.rs:71:9
+   |
+71 |     pub EpisodeDuration: i64, // Assuming this is an integer value for duration in seconds
+   |         ^^^^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_duration`
+
+warning: structure field `ListenDuration` should have a snake case name
+  --> src/helpers/requests.rs:73:9
+   |
+73 |     pub ListenDuration: Option<i64>, // Assuming this is an integer value for listened duration in seconds
+   |         ^^^^^^^^^^^^^^ help: convert the identifier to snake case: `listen_duration`
+
+warning: structure field `EpisodeID` should have a snake case name
+  --> src/helpers/requests.rs:75:9
+   |
+75 |     pub EpisodeID: Option<i64>,
+   |         ^^^^^^^^^ help: convert the identifier to snake case: `episode_id`
+
+warning: structure field `PodcastID` should have a snake case name
+  --> src/helpers/requests.rs:76:9
+   |
+76 |     pub PodcastID: Option<i64>,
+   |         ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
+
+warning: structure field `PodcastName` should have a snake case name
+  --> src/helpers/requests.rs:82:5
+   |
+82 |     PodcastName: String,
+   |     ^^^^^^^^^^^ help: convert the identifier to snake case: `podcast_name`
+
+warning: structure field `ArtworkURL` should have a snake case name
+  --> src/helpers/requests.rs:83:5
+   |
+83 |     ArtworkURL: String,
+   |     ^^^^^^^^^^ help: convert the identifier to snake case: `artwork_url`
+
+warning: structure field `Description` should have a snake case name
+  --> src/helpers/requests.rs:84:5
+   |
+84 |     Description: String, // Add this field if needed in your struct
+   |     ^^^^^^^^^^^ help: convert the identifier to snake case: `description`
+
+warning: structure field `EpisodeCount` should have a snake case name
+  --> src/helpers/requests.rs:85:5
+   |
+85 |     EpisodeCount: u32,
+   |     ^^^^^^^^^^^^ help: convert the identifier to snake case: `episode_count`
+
+warning: structure field `WebsiteURL` should have a snake case name
+  --> src/helpers/requests.rs:86:5
+   |
+86 |     WebsiteURL: String,
+   |     ^^^^^^^^^^ help: convert the identifier to snake case: `website_url`
+
+warning: structure field `FeedURL` should have a snake case name
+  --> src/helpers/requests.rs:87:5
+   |
+87 |     FeedURL: String,
+   |     ^^^^^^^ help: convert the identifier to snake case: `feed_url`
+
+warning: structure field `Author` should have a snake case name
+  --> src/helpers/requests.rs:88:5
+   |
+88 |     Author: String,
+   |     ^^^^^^ help: convert the identifier to snake case: `author`
+
+warning: structure field `Categories` should have a snake case name
+  --> src/helpers/requests.rs:89:5
+   |
+89 |     Categories: String,
+   |     ^^^^^^^^^^ help: convert the identifier to snake case (notice the capitalization): `categories`
+
+warning: structure field `PodcastID` should have a snake case name
+  --> src/helpers/requests.rs:90:5
+   |
+90 |     PodcastID: i64,
+   |     ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
+
+warning: `pinepods_firewood` (lib) generated 44 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 12 suggestions)
+warning: unused imports: `PathBuf`, `Path`, `env`
+ --> src/app.rs:2:5
+  |
+2 |     env,
+  |     ^^^
+3 |     path::{Path, PathBuf},
+  |            ^^^^  ^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `debug`, `info`, `warn`
+ --> src/app.rs:8:11
+  |
+8 | use log::{info, debug, warn, error};
+  |           ^^^^  ^^^^^  ^^^^
+
+warning: unused import: `error::Error`
+ --> src/main.rs:5:5
+  |
+5 |     error::Error,
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `std::fmt::format`
+  --> src/main.rs:11:5
+   |
+11 | use std::fmt::format;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::thread::sleep`
+  --> src/main.rs:12:5
+   |
+12 | use std::thread::sleep;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ExecutableCommand`, `KeyEventKind`
+  --> src/main.rs:15:56
+   |
+15 |     event::{self, DisableMouseCapture, Event, KeyCode, KeyEventKind},
+   |                                                        ^^^^^^^^^^^^
+...
+18 |     ExecutableCommand
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Paragraph`
+  --> src/main.rs:25:90
+   |
+25 |     widgets::{Block, BorderType, Borders, Cell, Gauge, List, ListItem, Row, Table, Tabs, Paragraph},
+   |                                                                                          ^^^^^^^^^
+
+warning: unused import: `std::ops::Not`
+  --> src/main.rs:31:5
+   |
+31 | use std::ops::Not;
+   |     ^^^^^^^^^^^^^
+
+warning: unused import: `stderr`
+  --> src/main.rs:32:22
+   |
+32 | use std::io::{Write, stderr, Result};
+   |                      ^^^^^^
+
+warning: unused import: `serde_json::to_string`
+  --> src/main.rs:34:5
+   |
+34 | use serde_json::to_string;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `debug`, `info`, `warn`
+  --> src/main.rs:36:11
+   |
+36 | use log::{info, debug, warn, error};
+   |           ^^^^  ^^^^^  ^^^^
+
+warning: unnecessary parentheses around function argument
+   --> src/main.rs:121:50
+    |
+121 |                     let url_build = String::from((format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim())));
+    |                                                  ^                                                                             ^
+    |
+    = note: `#[warn(unused_parens)]` on by default
+help: remove these parentheses
+    |
+121 -                     let url_build = String::from((format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim())));
+121 +                     let url_build = String::from(format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim()));
+    |
+
+warning: unused variable: `feed_url`
+   --> src/app.rs:119:40
+    |
+119 |             ContentState::PodcastMode {feed_url} => {
+    |                                        ^^^^^^^^ help: try ignoring the field: `feed_url: _`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `podcast_id`
+   --> src/app.rs:138:41
+    |
+138 |             ContentState::EpisodeMode { podcast_id } => {
+    |                                         ^^^^^^^^^^ help: try ignoring the field: `podcast_id: _`
+
+warning: unused variable: `selected_episode`
+   --> src/app.rs:139:21
+    |
+139 |                 let selected_episode = match self.browser_items.item() {
+    |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_selected_episode`
+
+warning: variable does not need to be mutable
+   --> src/app.rs:127:21
+    |
+127 |                 let mut pinepods_values = self.pinepods_values.lock().unwrap();
+    |                     ----^^^^^^^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` on by default
+
+warning: unused import: `Stylize`
+  --> src/main.rs:21:33
+   |
+21 |     prelude::{CrosstermBackend, Stylize, Terminal, Backend},
+   |                                 ^^^^^^^
+
+warning: unused import: `Write`
+  --> src/main.rs:32:15
+   |
+32 | use std::io::{Write, stderr, Result};
+   |               ^^^^^
+
+warning: unused variable: `data`
+  --> src/main.rs:84:17
+   |
+84 |             Err(data) => {
+   |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: unused variable: `data`
+   --> src/main.rs:133:44
+    |
+133 | ...                   Ok(data) => {
+    |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: unused variable: `data`
+   --> src/main.rs:138:56
+    |
+138 | ...                   Ok(data) => { break }
+    |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
+
+warning: variable does not need to be mutable
+  --> src/main.rs:54:9
+   |
+54 |     let mut shared_values = Arc::new(Mutex::new(pinepods_firewood::helpers::requests::ReqwestValues {
+   |         ----^^^^^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/main.rs:168:9
+    |
+168 |     let mut pinepods_values = shared_values.lock().unwrap();
+    |         ----^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: fields `status_code` and `pinepods_instance` are never read
+  --> src/main.rs:41:5
+   |
+40 | struct PinepodsCheck {
+   |        ------------- fields in this struct
+41 |     status_code: u16,
+   |     ^^^^^^^^^^^
+42 |     pinepods_instance: bool
+   |     ^^^^^^^^^^^^^^^^^
+   |
+   = note: `PinepodsCheck` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+   = note: `#[warn(dead_code)]` on by default
+
+warning: variant `PlayingEpisode` is never constructed
+  --> src/app.rs:46:5
+   |
+43 | pub enum ContentState {
+   |          ------------ variant in this enum
+...
+46 |     PlayingEpisode { ep_url: String }
+   |     ^^^^^^^^^^^^^^
+
+warning: `pinepods_firewood` (bin "pinepods_firewood") generated 25 warnings (run `cargo fix --bin "pinepods_firewood"` to apply 21 suggestions)
+    Finished dev [unoptimized + debuginfo] target(s) in 5.78s
+     Running `target/debug/pinepods_firewood`
+[src/helpers/requests.rs:134] &config_json = Object {
+    "api_key": String("e5UUSeBBZsq5zHmkVSROSRxzdrH3H0yMWaVn1ibtK0N8vckS8pkbMclV0sYNrice\n"),
+    "url": String("https://pinepods.collinpendleton.com"),
+}
+[2023-11-29T13:26:38Z ERROR pinepods_firewood] Setting up terminal...
+[2023-11-29T13:26:38Z ERROR pinepods_firewood] creating app...
+[2023-11-29T13:26:38Z ERROR pinepods_firewood] running app...
+[2023-11-29T13:26:38Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
+[2023-11-29T13:26:38Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
+[2023-11-29T13:26:38Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
+[2023-11-29T13:26:40Z ERROR pinepods_firewood::helpers::requests] return eps1
+[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps2
+[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps3
+[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps2
