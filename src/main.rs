@@ -382,6 +382,7 @@ fn music_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Confi
                 BrowserItem::Episode(episode) => {
                     // Create a string representation for the episode
                     // For example, using the episode title
+                    episode.EpisodePubDate.clone() + " - " + &
                     episode.EpisodeTitle.clone()
                 }
             };

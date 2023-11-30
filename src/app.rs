@@ -151,6 +151,10 @@ impl<'a> App<'a> {
     pub async fn backpedal(&mut self) {
 
         // Fetch the podcasts and wrap them as BrowserItem
+        self.content_state = ContentState::PodcastMode {
+            feed_url: String::from("some_feed_url"), // Replace with an actual URL or appropriate default value
+        };
+
         let podcasts = gen_funcs::scan_folder(&self.pinepods_values).await;
         let podcast_items = podcasts.into_iter()
             .map(BrowserItem::Podcast)
