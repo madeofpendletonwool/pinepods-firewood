@@ -281,6 +281,9 @@ impl ReqwestValues {
     pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> anyhow::Result<Vec<PinepodsEpisodes>> {
         error!("return eps1");
         let client = reqwest::Client::new();
+        error!("{:?}", podcast_data.PodcastID);
+        error!("{:?}", self.user_id);
+
         let request_body = EpisodeRequest {
             podcast_id: podcast_data.PodcastID,  // Assuming PodcastID is of type i64
             user_id: self.user_id,
@@ -295,7 +298,7 @@ impl ReqwestValues {
         error!("return eps3");
         if response.status().is_success() {
             let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
-            let episodes = json.get("episode_info").cloned().unwrap_or_else(Vec::new);
+            let episodes = json.get("episodes").cloned().unwrap_or_else(Vec::new);
             error!("return eps2");
             Ok(episodes)
         } else {

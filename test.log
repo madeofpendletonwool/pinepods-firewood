@@ -1,4 +1,3 @@
-   Compiling pinepods_firewood v0.1.0 (/home/collinp/Documents/GitHub/pinepods-firewood)
 warning: unused imports: `MatchOptions`, `glob_with`
  --> src/helpers/gen_funcs.rs:9:12
   |
@@ -290,6 +289,7 @@ warning: structure field `PodcastID` should have a snake case name
    |     ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
 
 warning: `pinepods_firewood` (lib) generated 44 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 12 suggestions)
+   Compiling pinepods_firewood v0.1.0 (/home/collinp/Documents/GitHub/pinepods-firewood)
 warning: unused imports: `PathBuf`, `Path`, `env`
  --> src/app.rs:2:5
   |
@@ -475,19 +475,22 @@ warning: variant `PlayingEpisode` is never constructed
    |     ^^^^^^^^^^^^^^
 
 warning: `pinepods_firewood` (bin "pinepods_firewood") generated 25 warnings (run `cargo fix --bin "pinepods_firewood"` to apply 21 suggestions)
-    Finished dev [unoptimized + debuginfo] target(s) in 5.78s
+    Finished dev [unoptimized + debuginfo] target(s) in 5.06s
      Running `target/debug/pinepods_firewood`
 [src/helpers/requests.rs:134] &config_json = Object {
     "api_key": String("e5UUSeBBZsq5zHmkVSROSRxzdrH3H0yMWaVn1ibtK0N8vckS8pkbMclV0sYNrice\n"),
     "url": String("https://pinepods.collinpendleton.com"),
 }
-[2023-11-29T13:26:38Z ERROR pinepods_firewood] Setting up terminal...
-[2023-11-29T13:26:38Z ERROR pinepods_firewood] creating app...
-[2023-11-29T13:26:38Z ERROR pinepods_firewood] running app...
-[2023-11-29T13:26:38Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-11-29T13:26:38Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
-[2023-11-29T13:26:38Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
-[2023-11-29T13:26:40Z ERROR pinepods_firewood::helpers::requests] return eps1
-[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps2
-[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps3
-[2023-11-29T13:26:41Z ERROR pinepods_firewood::helpers::requests] return eps2
+[2023-11-30T13:12:14Z ERROR pinepods_firewood] Setting up terminal...
+[2023-11-30T13:12:14Z ERROR pinepods_firewood] creating app...
+[2023-11-30T13:12:14Z ERROR pinepods_firewood] running app...
+[2023-11-30T13:12:14Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
+[2023-11-30T13:12:14Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
+[2023-11-30T13:12:14Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
+[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] return eps1
+[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] 1
+[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] 2
+[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] return eps2
+[2023-11-30T13:12:17Z ERROR pinepods_firewood::helpers::requests] return eps3
+[2023-11-30T13:12:17Z ERROR pinepods_firewood::helpers::requests] return eps2
+[2023-11-30T13:12:55Z ERROR pinepods_firewood] shutdown app...
