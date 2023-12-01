@@ -231,7 +231,7 @@ async fn run_app<B: Backend>(
                         KeyCode::Char('g') => app.music_handle.skip(),
                         KeyCode::Char('a') => {
                             if let Some(SelectedItem::Episode(episode)) = app.selected_item() {
-                                app.queue_items.add(episode.EpisodeURL.clone(), episode.EpisodeDuration);
+                                app.queue_items.add(episode, episode.EpisodeDuration);
                             }
                         }
                         KeyCode::Enter => app.evaluate().await,

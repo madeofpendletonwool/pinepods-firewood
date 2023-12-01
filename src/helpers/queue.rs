@@ -5,13 +5,14 @@ use std::{
 
 use lofty::{AudioFile, Probe};
 use ratatui::widgets::ListState;
+use crate::requests::PinepodsEpisodes;
 
 use super::gen_funcs::bulk_add;
 use super::constants::{SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE};
 
 pub struct Queue {
     state: ListState,
-    items: VecDeque<String>,
+    items: VecDeque<PinepodsEpisodes>,
     curr: usize,
     total_time: u32,
 }
@@ -27,7 +28,7 @@ impl Queue {
     }
 
     // return item at index
-    pub fn item(&self) -> Option<&String> {
+    pub fn item(&self) -> Option<&PinepodsEpisodes> {
         if self.items.is_empty() {
             None
         } else {
@@ -36,7 +37,7 @@ impl Queue {
     }
 
     // return all items contained in vector
-    pub fn items(&self) -> &VecDeque<String> {
+    pub fn items(&self) -> &VecDeque<PinepodsEpisodes> {
         &self.items
     }
 
@@ -94,7 +95,7 @@ impl Queue {
         self.items.is_empty()
     }
 
-    pub fn pop(&mut self) -> String {
+    pub fn pop(&mut self) -> PinepodsEpisodes {
         self.decrement_total_time();
         self.items.pop_front().unwrap()
     }
@@ -110,18 +111,9 @@ impl Queue {
     }
 
     // get audio file length
-    pub fn item_length(&mut self, path: &String) -> u32 {
-        let path = Path::new(&path);
-        let tagged_file = Probe::open(path)
-            .expect("ERROR: Bad path provided!")
-            .read()
-            .expect("ERROR: Failed to read file!");
-
-        let properties = &tagged_file.properties();
-        let duration = properties.duration();
-
-        // update song length, currently playing
-        duration.as_secs() as u32
+    pub fn item_length(&self, episode: &PinepodsEpisodes) -> u32 {
+        // Simply return the EpisodeDuration provided by the API
+        episode.EpisodeDuration as u32
     }
 
     pub fn next(&mut self) {
@@ -167,9 +159,9 @@ impl Queue {
         self.state.select(None);
     }
 
-    pub fn add(&mut self, episode_url: String, episode_duration: i64) {
+    pub fn add(&mut self, pinepods_episodes: PinepodsEpisodes, episode_duration: i64) {
         // Add the episode URL to the queue
-        self.items.push_back(episode_url);
+        self.items.push_back(pinepods_episodes);
 
         // Update the total time of the queue
         self.total_time += episode_duration as u32;

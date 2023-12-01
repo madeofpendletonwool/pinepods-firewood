@@ -140,6 +140,10 @@ impl<'a> App<'a> {
                     BrowserItem::Episode(e) => e,
                     _ => return, // or handle error if necessary
                 };
+                let episode_url = selected_episode.EpisodeURL.clone();
+                let episode_duration = selected_episode.EpisodeDuration.clone();
+                let listen_duration = selected_episode.ListenDuration.clone();
+                self.music_handle.play(selected_episode);
                 // Logic to handle episode selection and playback
                 // For example, change state to PlayingEpisode or perform other actions
             },
@@ -170,9 +174,14 @@ impl<'a> App<'a> {
         thread::sleep(Duration::from_millis(250));
         if self.music_handle.sink_empty() && !self.queue_items.is_empty() {
             self.music_handle.set_time_played(0);
-            self.music_handle.play(self.queue_items.pop());
+            if let Some(episode) = self.queue_items.pop() {
+                self.music_handle.play(&episode);
+                // If you need to retain the episode in queue_items, push it back after playing
+                self.queue_items.push(episode);
+            }
         }
     }
+
 
     // if playing and
     pub fn song_progress(&mut self) -> u16 {
