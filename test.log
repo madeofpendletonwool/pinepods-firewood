@@ -6,23 +6,56 @@ warning: unused imports: `MatchOptions`, `glob_with`
   |
   = note: `#[warn(unused_imports)]` on by default
 
-warning: unused import: `PathBuf`
- --> src/helpers/music_handler.rs:4:18
-  |
-4 |     path::{Path, PathBuf},
-  |                  ^^^^^^^
+warning: unused imports: `Accessor`, `Probe`, `TaggedFileExt`
+  --> src/helpers/gen_funcs.rs:10:13
+   |
+10 | use lofty::{Accessor, Probe, TaggedFileExt};
+   |             ^^^^^^^^  ^^^^^  ^^^^^^^^^^^^^
 
-warning: unused import: `PathBuf`
- --> src/helpers/queue.rs:3:18
+warning: unused imports: `PathBuf`, `Path`, `fs::File`, `io::BufReader`, `thread`, `time::Duration`
+ --> src/helpers/music_handler.rs:2:5
+  |
+2 |     fs::File,
+  |     ^^^^^^^^
+3 |     io::BufReader,
+  |     ^^^^^^^^^^^^^
+4 |     path::{Path, PathBuf},
+  |            ^^^^  ^^^^^^^
+5 |     sync::{Arc, Mutex},
+6 |     thread,
+  |     ^^^^^^
+7 |     time::Duration,
+  |     ^^^^^^^^^^^^^^
+
+warning: unused imports: `AudioFile`, `Probe`
+  --> src/helpers/music_handler.rs:10:13
+   |
+10 | use lofty::{AudioFile, Probe};
+   |             ^^^^^^^^^  ^^^^^
+
+warning: unused import: `Decoder`
+  --> src/helpers/music_handler.rs:11:13
+   |
+11 | use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+   |             ^^^^^^^
+
+warning: unused imports: `PathBuf`, `Path`
+ --> src/helpers/queue.rs:3:12
   |
 3 |     path::{Path, PathBuf},
-  |                  ^^^^^^^
+  |            ^^^^  ^^^^^^^
+
+warning: unused imports: `AudioFile`, `Probe`
+ --> src/helpers/queue.rs:6:13
+  |
+6 | use lofty::{AudioFile, Probe};
+  |             ^^^^^^^^^  ^^^^^
 
 warning: unused import: `super::gen_funcs::bulk_add`
- --> src/helpers/queue.rs:9:5
-  |
-9 | use super::gen_funcs::bulk_add;
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  --> src/helpers/queue.rs:10:5
+   |
+10 | use super::gen_funcs::bulk_add;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 warning: unused import: `std::any::Any`
  --> src/helpers/requests.rs:1:5
@@ -87,13 +120,21 @@ warning: variable does not need to be mutable
     |
     = note: `#[warn(unused_mut)]` on by default
 
+warning: field `music_output` is never read
+  --> src/helpers/music_handler.rs:17:5
+   |
+16 | pub struct MusicHandle {
+   |            ----------- field in this struct
+17 |     music_output: Arc<(OutputStream, OutputStreamHandle)>,
+   |     ^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
 warning: function `create_app_path` is never used
    --> src/helpers/requests.rs:122:4
     |
 122 | fn create_app_path(app_path: &Display) -> std::io::Result<()> {
     |    ^^^^^^^^^^^^^^^
-    |
-    = note: `#[warn(dead_code)]` on by default
 
 warning: field `pinepods_instance` is never read
  --> src/helpers/models.rs:6:16
@@ -288,7 +329,7 @@ warning: structure field `PodcastID` should have a snake case name
 90 |     PodcastID: i64,
    |     ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
 
-warning: `pinepods_firewood` (lib) generated 44 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 12 suggestions)
+warning: `pinepods_firewood` (lib) generated 49 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 16 suggestions)
    Compiling pinepods_firewood v0.1.0 (/home/collinp/Documents/GitHub/pinepods-firewood)
 warning: unused imports: `PathBuf`, `Path`, `env`
  --> src/app.rs:2:5
@@ -376,6 +417,43 @@ help: remove these parentheses
 121 +                     let url_build = String::from(format!("{}{}{}", web_protocol.to_lowercase().trim(), "://", hostname.trim()));
     |
 
+error[E0308]: mismatched types
+   --> src/main.rs:234:53
+    |
+234 | ...                   app.queue_items.add(episode, episode.EpisodeDuration);
+    |                                       --- ^^^^^^^ expected `PinepodsEpisodes`, found `&PinepodsEpisodes`
+    |                                       |
+    |                                       arguments to this method are incorrect
+    |
+note: method defined here
+   --> /home/collinp/Documents/GitHub/pinepods-firewood/src/helpers/queue.rs:162:12
+    |
+162 |     pub fn add(&mut self, pinepods_episodes: PinepodsEpisodes, episode_duration: i64) {
+    |            ^^^
+help: consider using clone here
+    |
+234 |                                 app.queue_items.add(episode.clone(), episode.EpisodeDuration);
+    |                                                            ++++++++
+
+error[E0308]: mismatched types
+   --> src/main.rs:261:55
+    |
+261 | ...                   app.music_handle.play(i.clone());
+    |                                        ---- ^^^^^^^^^ expected `&PinepodsEpisodes`, found `PinepodsEpisodes`
+    |                                        |
+    |                                        arguments to this method are incorrect
+    |
+note: method defined here
+   --> /home/collinp/Documents/GitHub/pinepods-firewood/src/helpers/music_handler.rs:66:12
+    |
+66  |     pub fn play(&mut self, episode: &PinepodsEpisodes) {
+    |            ^^^^
+help: try removing the method call
+    |
+261 -                                 app.music_handle.play(i.clone());
+261 +                                 app.music_handle.play(i);
+    |
+
 warning: unused variable: `feed_url`
    --> src/app.rs:119:40
     |
@@ -390,11 +468,23 @@ warning: unused variable: `podcast_id`
 138 |             ContentState::EpisodeMode { podcast_id } => {
     |                                         ^^^^^^^^^^ help: try ignoring the field: `podcast_id: _`
 
-warning: unused variable: `selected_episode`
-   --> src/app.rs:139:21
+warning: unused variable: `episode_url`
+   --> src/app.rs:143:21
     |
-139 |                 let selected_episode = match self.browser_items.item() {
-    |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_selected_episode`
+143 |                 let episode_url = selected_episode.EpisodeURL.clone();
+    |                     ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_episode_url`
+
+warning: unused variable: `episode_duration`
+   --> src/app.rs:144:21
+    |
+144 |                 let episode_duration = selected_episode.EpisodeDuration.clone();
+    |                     ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_episode_duration`
+
+warning: unused variable: `listen_duration`
+   --> src/app.rs:145:21
+    |
+145 |                 let listen_duration = selected_episode.ListenDuration.clone();
+    |                     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_listen_duration`
 
 warning: variable does not need to be mutable
    --> src/app.rs:127:21
@@ -405,6 +495,21 @@ warning: variable does not need to be mutable
     |                     help: remove this `mut`
     |
     = note: `#[warn(unused_mut)]` on by default
+
+error[E0308]: mismatched types
+   --> src/app.rs:177:20
+    |
+177 |             if let Some(episode) = self.queue_items.pop() {
+    |                    ^^^^^^^^^^^^^   ---------------------- this expression has type `PinepodsEpisodes`
+    |                    |
+    |                    expected `PinepodsEpisodes`, found `Option<_>`
+    |
+    = note: expected struct `PinepodsEpisodes`
+                 found enum `std::option::Option<_>`
+help: you might have meant to use field `PodcastName` whose type is `std::option::Option<std::string::String>`
+    |
+177 |             if let Some(episode) = self.queue_items.pop().PodcastName {
+    |                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 warning: unused import: `Stylize`
   --> src/main.rs:21:33
@@ -418,79 +523,6 @@ warning: unused import: `Write`
 32 | use std::io::{Write, stderr, Result};
    |               ^^^^^
 
-warning: unused variable: `data`
-  --> src/main.rs:84:17
-   |
-84 |             Err(data) => {
-   |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
-
-warning: unused variable: `data`
-   --> src/main.rs:133:44
-    |
-133 | ...                   Ok(data) => {
-    |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
-
-warning: unused variable: `data`
-   --> src/main.rs:138:56
-    |
-138 | ...                   Ok(data) => { break }
-    |                          ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
-
-warning: variable does not need to be mutable
-  --> src/main.rs:54:9
-   |
-54 |     let mut shared_values = Arc::new(Mutex::new(pinepods_firewood::helpers::requests::ReqwestValues {
-   |         ----^^^^^^^^^^^^^
-   |         |
-   |         help: remove this `mut`
-
-warning: variable does not need to be mutable
-   --> src/main.rs:168:9
-    |
-168 |     let mut pinepods_values = shared_values.lock().unwrap();
-    |         ----^^^^^^^^^^^^^^^
-    |         |
-    |         help: remove this `mut`
-
-warning: fields `status_code` and `pinepods_instance` are never read
-  --> src/main.rs:41:5
-   |
-40 | struct PinepodsCheck {
-   |        ------------- fields in this struct
-41 |     status_code: u16,
-   |     ^^^^^^^^^^^
-42 |     pinepods_instance: bool
-   |     ^^^^^^^^^^^^^^^^^
-   |
-   = note: `PinepodsCheck` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
-   = note: `#[warn(dead_code)]` on by default
-
-warning: variant `PlayingEpisode` is never constructed
-  --> src/app.rs:46:5
-   |
-43 | pub enum ContentState {
-   |          ------------ variant in this enum
-...
-46 |     PlayingEpisode { ep_url: String }
-   |     ^^^^^^^^^^^^^^
-
-warning: `pinepods_firewood` (bin "pinepods_firewood") generated 25 warnings (run `cargo fix --bin "pinepods_firewood"` to apply 21 suggestions)
-    Finished dev [unoptimized + debuginfo] target(s) in 5.06s
-     Running `target/debug/pinepods_firewood`
-[src/helpers/requests.rs:134] &config_json = Object {
-    "api_key": String("e5UUSeBBZsq5zHmkVSROSRxzdrH3H0yMWaVn1ibtK0N8vckS8pkbMclV0sYNrice\n"),
-    "url": String("https://pinepods.collinpendleton.com"),
-}
-[2023-11-30T13:12:14Z ERROR pinepods_firewood] Setting up terminal...
-[2023-11-30T13:12:14Z ERROR pinepods_firewood] creating app...
-[2023-11-30T13:12:14Z ERROR pinepods_firewood] running app...
-[2023-11-30T13:12:14Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-11-30T13:12:14Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
-[2023-11-30T13:12:14Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
-[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] return eps1
-[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] 1
-[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] 2
-[2023-11-30T13:12:16Z ERROR pinepods_firewood::helpers::requests] return eps2
-[2023-11-30T13:12:17Z ERROR pinepods_firewood::helpers::requests] return eps3
-[2023-11-30T13:12:17Z ERROR pinepods_firewood::helpers::requests] return eps2
-[2023-11-30T13:12:55Z ERROR pinepods_firewood] shutdown app...
+For more information about this error, try `rustc --explain E0308`.
+warning: `pinepods_firewood` (bin "pinepods_firewood") generated 20 warnings
+error: could not compile `pinepods_firewood` (bin "pinepods_firewood") due to 3 previous errors; 20 warnings emitted

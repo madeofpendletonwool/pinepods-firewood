@@ -10,30 +10,11 @@ use glob::{glob_with, MatchOptions};
 use lofty::{Accessor, Probe, TaggedFileExt};
 
 use log::error;
-use crate::requests::PinepodsPodcasts;
+use crate::requests::{PinepodsEpisodes, PinepodsPodcasts};
 
 // converts queue items to what's displayed for user
-pub fn audio_display(path: &String) -> String {
-    let path = Path::new(&path);
-    let tagged_file = Probe::open(path)
-        .expect("ERROR: Bad path provided!")
-        .read()
-        .expect("ERROR: Failed to read file!");
-
-    let ptag = tagged_file.primary_tag().unwrap();
-    let artist = ptag.artist();
-
-    // if filename
-    if let Some(i) = tagged_file.primary_tag().unwrap().title() {
-        // if artist data
-        if let Some(j) = artist {
-            format!("{artist} - {title}", artist = j, title = i)
-        } else {
-            i.into()
-        }
-    } else {
-        path.file_name().unwrap().to_str().unwrap().to_string()
-    }
+pub fn audio_display(episode: &PinepodsEpisodes) -> String {
+    return format!("{:?} - {}", episode.PodcastName, episode.EpisodeTitle);
 }
 
 // scans folder for valid files, returns matches
