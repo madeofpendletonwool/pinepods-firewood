@@ -174,11 +174,8 @@ impl<'a> App<'a> {
         thread::sleep(Duration::from_millis(250));
         if self.music_handle.sink_empty() && !self.queue_items.is_empty() {
             self.music_handle.set_time_played(0);
-            if let Some(episode) = self.queue_items.pop() {
-                self.music_handle.play(&episode);
-                // If you need to retain the episode in queue_items, push it back after playing
-                self.queue_items.push(episode);
-            }
+            let episode = self.queue_items.pop(); // Directly get the episode
+            self.music_handle.play(&episode);
         }
     }
 
