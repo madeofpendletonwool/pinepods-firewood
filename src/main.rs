@@ -231,7 +231,7 @@ async fn run_app<B: Backend>(
                         KeyCode::Char('g') => app.music_handle.skip(),
                         KeyCode::Char('a') => {
                             if let Some(SelectedItem::Episode(episode)) = app.selected_item() {
-                                app.queue_items.add(episode, episode.EpisodeDuration);
+                                app.queue_items.add(episode.clone(), episode.EpisodeDuration);
                             }
                         }
                         KeyCode::Enter => app.evaluate().await,
@@ -258,7 +258,7 @@ async fn run_app<B: Backend>(
                         KeyCode::Char('g') => app.music_handle.skip(),
                         KeyCode::Enter => {
                             if let Some(i) = app.queue_items.item() {
-                                app.music_handle.play(i.clone());
+                                app.music_handle.play(i);
                             };
                         }
                         KeyCode::Down | KeyCode::Char('j') => app.queue_items.next(),
