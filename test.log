@@ -13,6 +13,12 @@ warning: unused imports: `Accessor`, `Probe`, `TaggedFileExt`
 10 | use lofty::{Accessor, Probe, TaggedFileExt};
    |             ^^^^^^^^  ^^^^^  ^^^^^^^^^^^^^
 
+warning: unused import: `log::error`
+  --> src/helpers/gen_funcs.rs:12:5
+   |
+12 | use log::error;
+   |     ^^^^^^^^^^
+
 warning: unused imports: `BufReader`, `PathBuf`, `Path`, `fs::File`
  --> src/helpers/music_handler.rs:2:5
   |
@@ -92,13 +98,19 @@ warning: unused import: `std::path::Path`
 189 |             use std::path::Path;
     |                 ^^^^^^^^^^^^^^^
 
+warning: unused variable: `e`
+  --> src/helpers/gen_funcs.rs:32:13
+   |
+32 |         Err(e) => {
+   |             ^ help: if this is intentional, prefix it with an underscore: `_e`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
 warning: unused variable: `data`
    --> src/helpers/requests.rs:139:16
     |
 139 |             Ok(data) => {}
     |                ^^^^ help: if this is intentional, prefix it with an underscore: `_data`
-    |
-    = note: `#[warn(unused_variables)]` on by default
 
 warning: unused variable: `data`
    --> src/helpers/requests.rs:140:17
@@ -331,7 +343,7 @@ warning: structure field `PodcastID` should have a snake case name
 90 |     PodcastID: i64,
    |     ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
 
-warning: `pinepods_firewood` (lib) generated 50 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 18 suggestions)
+warning: `pinepods_firewood` (lib) generated 52 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 20 suggestions)
 warning: unused imports: `PathBuf`, `Path`, `env`
  --> src/app.rs:2:5
   |
@@ -529,20 +541,14 @@ warning: variant `PlayingEpisode` is never constructed
    |     ^^^^^^^^^^^^^^
 
 warning: `pinepods_firewood` (bin "pinepods_firewood") generated 27 warnings (run `cargo fix --bin "pinepods_firewood"` to apply 23 suggestions)
-    Finished dev [unoptimized + debuginfo] target(s) in 5.33s
+    Finished dev [unoptimized + debuginfo] target(s) in 5.14s
      Running `target/debug/pinepods_firewood`
 [src/helpers/requests.rs:134] &config_json = Object {
     "api_key": String("e5UUSeBBZsq5zHmkVSROSRxzdrH3H0yMWaVn1ibtK0N8vckS8pkbMclV0sYNrice\n"),
     "url": String("https://pinepods.collinpendleton.com"),
 }
-[2023-12-07T13:21:25Z ERROR pinepods_firewood] Setting up terminal...
-[2023-12-07T13:21:25Z ERROR pinepods_firewood] creating app...
-[2023-12-07T13:21:25Z ERROR pinepods_firewood] running app...
-[2023-12-07T13:21:25Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-12-07T13:21:25Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
-[2023-12-07T13:21:25Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
-[2023-12-07T13:21:29Z ERROR pinepods_firewood::helpers::music_handler] Playing: https://op3.dev/e/https://cdn.changelog.com/uploads/practicalai/248/practical-ai-248.mp3
-[2023-12-07T13:22:22Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-12-07T13:22:22Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
-[2023-12-07T13:22:28Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-12-07T13:22:28Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
+[2023-12-07T13:30:41Z ERROR pinepods_firewood] Setting up terminal...
+[2023-12-07T13:30:41Z ERROR pinepods_firewood] creating app...
+[2023-12-07T13:30:41Z ERROR pinepods_firewood] running app...
+[2023-12-07T13:30:41Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
+[2023-12-07T13:30:56Z ERROR pinepods_firewood] shutdown app...

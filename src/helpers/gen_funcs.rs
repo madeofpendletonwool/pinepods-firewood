@@ -19,7 +19,6 @@ pub fn audio_display(episode: &PinepodsEpisodes) -> String {
 
 // scans folder for valid files, returns matches
 pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestValues>>) -> Vec<PinepodsPodcasts> {
-    error!("before lock...");
 
     let result = {
         let pinepods_locked = pinepods_values.lock().expect("Lock is poisoned!");
@@ -28,11 +27,9 @@ pub async fn scan_folder(pinepods_values: &Arc<Mutex<super::requests::ReqwestVal
 
     match result {
         Ok(podcasts) => {
-            error!("pods return finished...");
             podcasts
         },
         Err(e) => {
-            eprintln!("Request failed: {:?}", e);
             Vec::new() // return empty list on error
         }
     }

@@ -419,7 +419,7 @@ fn music_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg: &Confi
         .collect();
 
     let queue_title = format!(
-        "| Queue: {queue_items} Songs |{total_time}",
+        "| Queue: {queue_items} Episodes |{total_time}",
         queue_items = app.queue_items.length(),
         total_time = app.queue_items.total_time(),
     );
