@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::BufReader,
+    io::{BufReader, Cursor},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     thread,
@@ -8,6 +8,7 @@ use std::{
 };
 
 use lofty::{AudioFile, Probe};
+use log::error;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use crate::requests::PinepodsEpisodes;
 
@@ -65,7 +66,8 @@ impl MusicHandle {
     // update current song and play
     pub fn play(&mut self, episode: &PinepodsEpisodes) {
         // if song already playing, need to be able to restart tho
-        println!("Playing: {}", episode.EpisodeURL.clone());
+        // println!("Playing: {}", episode.EpisodeURL.clone());
+        error!("Playing: {}", episode.EpisodeURL.clone());
         self.sink.stop();
         *self.time_played.lock().unwrap() = 0;
 
@@ -74,38 +76,45 @@ impl MusicHandle {
         self.set_currently_playing(episode);
         self.update_song_length(episode);
 
-        // // reinitialize due to rodio crate
-        // self.sink = Arc::new(Sink::try_new(&self.music_output.1).unwrap());
-        //
-        // // clone sink for thread
-        // let sclone = self.sink.clone();
-        //
-        // let tpclone = self.time_played.clone();
-        //
-        // let _t1 = thread::spawn(move || {
-        //     // can send in through function
-        //     let file = BufReader::new(File::open(episode).unwrap());
-        //     let source = Decoder::new(file).unwrap();
-        //
-        //     // Arc inside a thread inside a thread. BOOM, INCEPTION
-        //     let sink_clone_2 = sclone.clone();
-        //     let tpclone2 = tpclone.clone();
-        //
-        //     sclone.append(source);
-        //
-        //     let _ = thread::spawn(move || {
-        //         // sleep for 1 second then increment count
-        //         while sink_clone_2.len() == 1 {
-        //             thread::sleep(Duration::from_secs(1));
-        //
-        //             if !sink_clone_2.is_paused() {
-        //                 *tpclone2.lock().unwrap() += 1;
-        //             }
-        //         }
-        //     });
-        //     // if sink.stop, thread destroyed.
-        //     sclone.sleep_until_end();
-        // });
+        // reinitialize due to rodio crate
+        self.sink = Arc::new(Sink::try_new(&self.music_output.1).unwrap());
+
+        // clone sink for thread
+        let sclone = self.sink.clone();
+
+        let tpclone = self.time_played.clone();
+
+        let episode_url = episode.EpisodeURL.clone();
+        let episode_title = episode.EpisodeTitle.clone();
+
+        let _t1 = thread::spawn(move || {
+
+            // can send in through function
+            // get file
+            let resp = reqwest::blocking::get(episode_url).unwrap();
+            let mut cursor = Cursor::new(resp.bytes().unwrap()); // Adds Read and Seek to the bytes via Cursor
+            // let file = BufReader::new(File::open(episode).unwrap());
+            let source = Decoder::new(cursor).unwrap();
+
+            // Arc inside a thread inside a thread. BOOM, INCEPTION
+            let sink_clone_2 = sclone.clone();
+            let tpclone2 = tpclone.clone();
+
+            sclone.append(source);
+
+            let _ = thread::spawn(move || {
+                // sleep for 1 second then increment count
+                while sink_clone_2.len() == 1 {
+                    thread::sleep(Duration::from_secs(1));
+
+                    if !sink_clone_2.is_paused() {
+                        *tpclone2.lock().unwrap() += 1;
+                    }
+                }
+            });
+            // if sink.stop, thread destroyed.
+            sclone.sleep_until_end();
+        });
     }
 
     pub fn play_pause(&mut self) {
