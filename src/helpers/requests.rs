@@ -2,7 +2,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use reqwest;
 use tokio;
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use std::fs::create_dir_all;
 use directories::{ProjectDirs};
@@ -278,31 +278,31 @@ impl ReqwestValues {
     }
 
 
-    pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> anyhow::Result<Vec<PinepodsEpisodes>> {
-        error!("return eps1");
+    pub async fn return_eps(&self, podcast_data: &PinepodsPodcasts) -> Result<Vec<PinepodsEpisodes>> {
         let client = reqwest::Client::new();
-        error!("{:?}", podcast_data.PodcastID);
-        error!("{:?}", self.user_id);
-
         let request_body = EpisodeRequest {
-            podcast_id: podcast_data.PodcastID,  // Assuming PodcastID is of type i64
+            podcast_id: podcast_data.PodcastID,
             user_id: self.user_id,
         };
-        error!("return eps2");
+
         let response = client
             .post(&format!("{}/api/data/podcast_episodes", &self.url))
             .header("Api-Key", &self.api_key.trim().to_string())
             .json(&request_body)
             .send()
-            .await?;
-        error!("return eps3");
+            .await
+            .context("Failed to send request to the server")?;
+
         if response.status().is_success() {
-            let json: HashMap<String, Vec<PinepodsEpisodes>> = response.json().await?;
+            let json: HashMap<String, Vec<PinepodsEpisodes>> = response
+                .json()
+                .await
+                .context("Failed to deserialize JSON response")?;
+
             let episodes = json.get("episodes").cloned().unwrap_or_else(Vec::new);
-            error!("return eps2");
             Ok(episodes)
         } else {
-            Err(anyhow!("Error fetching episodes"))
+            Err(anyhow!("Error fetching episodes: {}", response.status()))
         }
     }
 

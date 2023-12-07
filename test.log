@@ -1,3 +1,4 @@
+   Compiling pinepods_firewood v0.1.0 (/home/collinp/Documents/GitHub/pinepods-firewood)
 warning: unused imports: `MatchOptions`, `glob_with`
  --> src/helpers/gen_funcs.rs:9:12
   |
@@ -12,32 +13,21 @@ warning: unused imports: `Accessor`, `Probe`, `TaggedFileExt`
 10 | use lofty::{Accessor, Probe, TaggedFileExt};
    |             ^^^^^^^^  ^^^^^  ^^^^^^^^^^^^^
 
-warning: unused imports: `PathBuf`, `Path`, `fs::File`, `io::BufReader`, `thread`, `time::Duration`
+warning: unused imports: `BufReader`, `PathBuf`, `Path`, `fs::File`
  --> src/helpers/music_handler.rs:2:5
   |
 2 |     fs::File,
   |     ^^^^^^^^
-3 |     io::BufReader,
-  |     ^^^^^^^^^^^^^
+3 |     io::{BufReader, Cursor},
+  |          ^^^^^^^^^
 4 |     path::{Path, PathBuf},
   |            ^^^^  ^^^^^^^
-5 |     sync::{Arc, Mutex},
-6 |     thread,
-  |     ^^^^^^
-7 |     time::Duration,
-  |     ^^^^^^^^^^^^^^
 
 warning: unused imports: `AudioFile`, `Probe`
   --> src/helpers/music_handler.rs:10:13
    |
 10 | use lofty::{AudioFile, Probe};
    |             ^^^^^^^^^  ^^^^^
-
-warning: unused import: `Decoder`
-  --> src/helpers/music_handler.rs:11:13
-   |
-11 | use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
-   |             ^^^^^^^
 
 warning: unused imports: `PathBuf`, `Path`
  --> src/helpers/queue.rs:3:12
@@ -74,6 +64,12 @@ warning: unused import: `std::pin::pin`
    |
 11 | use std::pin::pin;
    |     ^^^^^^^^^^^^^
+
+warning: unused import: `log::error`
+  --> src/helpers/requests.rs:17:5
+   |
+17 | use log::error;
+   |     ^^^^^^^^^^
 
 warning: unused import: `std::error::Error`
   --> src/helpers/requests.rs:18:5
@@ -120,21 +116,27 @@ warning: variable does not need to be mutable
     |
     = note: `#[warn(unused_mut)]` on by default
 
-warning: field `music_output` is never read
-  --> src/helpers/music_handler.rs:17:5
+warning: unused variable: `episode_title`
+  --> src/helpers/music_handler.rs:88:13
    |
-16 | pub struct MusicHandle {
-   |            ----------- field in this struct
-17 |     music_output: Arc<(OutputStream, OutputStreamHandle)>,
-   |     ^^^^^^^^^^^^
+88 |         let episode_title = episode.EpisodeTitle.clone();
+   |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_episode_title`
+
+warning: variable does not need to be mutable
+  --> src/helpers/music_handler.rs:95:17
    |
-   = note: `#[warn(dead_code)]` on by default
+95 |             let mut cursor = Cursor::new(resp.bytes().unwrap()); // Adds Read and Seek to the bytes via Cursor
+   |                 ----^^^^^^
+   |                 |
+   |                 help: remove this `mut`
 
 warning: function `create_app_path` is never used
    --> src/helpers/requests.rs:122:4
     |
 122 | fn create_app_path(app_path: &Display) -> std::io::Result<()> {
     |    ^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` on by default
 
 warning: field `pinepods_instance` is never read
  --> src/helpers/models.rs:6:16
@@ -329,7 +331,7 @@ warning: structure field `PodcastID` should have a snake case name
 90 |     PodcastID: i64,
    |     ^^^^^^^^^ help: convert the identifier to snake case: `podcast_id`
 
-warning: `pinepods_firewood` (lib) generated 49 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 16 suggestions)
+warning: `pinepods_firewood` (lib) generated 50 warnings (run `cargo fix --lib -p pinepods_firewood` to apply 18 suggestions)
 warning: unused imports: `PathBuf`, `Path`, `env`
  --> src/app.rs:2:5
   |
@@ -527,21 +529,20 @@ warning: variant `PlayingEpisode` is never constructed
    |     ^^^^^^^^^^^^^^
 
 warning: `pinepods_firewood` (bin "pinepods_firewood") generated 27 warnings (run `cargo fix --bin "pinepods_firewood"` to apply 23 suggestions)
-    Finished dev [unoptimized + debuginfo] target(s) in 0.09s
+    Finished dev [unoptimized + debuginfo] target(s) in 5.33s
      Running `target/debug/pinepods_firewood`
 [src/helpers/requests.rs:134] &config_json = Object {
     "api_key": String("e5UUSeBBZsq5zHmkVSROSRxzdrH3H0yMWaVn1ibtK0N8vckS8pkbMclV0sYNrice\n"),
     "url": String("https://pinepods.collinpendleton.com"),
 }
-[2023-12-06T13:22:08Z ERROR pinepods_firewood] Setting up terminal...
-[2023-12-06T13:22:08Z ERROR pinepods_firewood] creating app...
-[2023-12-06T13:22:08Z ERROR pinepods_firewood] running app...
-[2023-12-06T13:22:08Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
-[2023-12-06T13:22:08Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
-[2023-12-06T13:22:08Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] return eps1
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] 1
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] 2
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] return eps2
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] return eps3
-[2023-12-06T13:22:10Z ERROR pinepods_firewood::helpers::requests] return eps2
+[2023-12-07T13:21:25Z ERROR pinepods_firewood] Setting up terminal...
+[2023-12-07T13:21:25Z ERROR pinepods_firewood] creating app...
+[2023-12-07T13:21:25Z ERROR pinepods_firewood] running app...
+[2023-12-07T13:21:25Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
+[2023-12-07T13:21:25Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
+[2023-12-07T13:21:25Z ERROR pinepods_firewood::app] Fetched podcasts: [PinepodsPodcasts { PodcastID: 1, PodcastName: "Practical AI: Machine Learning, Data Science", ArtworkURL: "https://cdn.changelog.com/uploads/covers/practical-ai-original.png?v=63725770374", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 236, FeedURL: "https://changelog.com/practicalai/feed", WebsiteURL: "https://changelog.com/practicalai", Description: "Making artificial intelligence practical, productive, and accessible to everyone.  Practical AI is a show in which technology professionals, business people, students, enthusiasts, and expert guests engage in lively discussions about Artificial Intelligence and related topics (Machine Learning, Deep Learning, Neural Networks, GANs, MLOps, AIOps, and more). The focus is on productive implementations and real-world scenarios that are accessible to everyone. If you want to keep up with the latest advances in AI, while keeping one foot in the real world, then this is the show for you!" }, PinepodsPodcasts { PodcastID: 2, PodcastName: "The Changelog: Software Development, Open Source", ArtworkURL: "https://cdn.changelog.com/static/images/podcasts/podcast-original-f16d0363067166f241d080ee2e2d4a28.png", Author: "Changelog Media", Categories: "{\"102\": \"Technology\"}", EpisodeCount: 625, FeedURL: "https://changelog.com/podcast/feed", WebsiteURL: "https://changelog.com/podcast", Description: "Software’s best weekly news brief, deep technical interviews & talk show." }]
+[2023-12-07T13:21:29Z ERROR pinepods_firewood::helpers::music_handler] Playing: https://op3.dev/e/https://cdn.changelog.com/uploads/practicalai/248/practical-ai-248.mp3
+[2023-12-07T13:22:22Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
+[2023-12-07T13:22:22Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
+[2023-12-07T13:22:28Z ERROR pinepods_firewood::helpers::gen_funcs] before lock...
+[2023-12-07T13:22:28Z ERROR pinepods_firewood::helpers::gen_funcs] pods return finished...
