@@ -6,3 +6,4 @@ pub mod stateful_list;
 pub mod stateful_table;
 pub mod requests;
 pub mod models;
+pub mod mdns_utils;
