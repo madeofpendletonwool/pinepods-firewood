@@ -8,8 +8,6 @@ use std::{
     time::{Duration, Instant},
 };
 use app::{App, AppTab, InputMode, SelectedItem, BrowserItem};
-use std::fmt::format;
-use std::thread::sleep;
 use serde::Deserialize;
 use crossterm::{
     event::{self, DisableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -28,13 +26,10 @@ use ratatui::{
 // use app::{App, AppTab, InputMode};
 use config::Config;
 use pinepods_firewood::gen_funcs;
-use std::ops::Not;
-use std::io::{Write, stderr, Result};
+use std::io::{Result};
 use serde_derive::Serialize;
-use serde_json::to_string;
 use std::sync::{Arc, Mutex};
-use log::{info, debug, warn, error};
-
+use log::error;
 
 #[derive(Debug, Deserialize)]
 struct PinepodsCheck {
@@ -56,6 +51,17 @@ async fn main() -> Result<()> {
         api_key: String::new(),
         user_id: 2,
     }));
+
+    // let notify = Arc::new(Notify::new());
+    // let (tx, mut rx) = mpsc::channel(1);
+
+    // // Spawn a new thread for audio server
+    // thread::spawn(move || {
+    //     // This block now runs in a non-async thread
+    //     if let Err(e) = pinepods_firewood::mdns_utils::run_mdns_audio_server_blocking(tx) {
+    //         eprintln!("Server error: {}", e);
+    //     }
+    // });
 
     // let mut pinepods_values = shared_values.lock().unwrap();
 
@@ -316,18 +322,19 @@ fn ui<B: Backend>(f: &mut Frame, app: &mut App, cfg: &Config) {
     let block = Block::default().style(Style::default().bg(cfg.background()));
     f.render_widget(block, size);
 
-    // Tab Title items collected
-    let titles = app
+    // Assuming Line is from ratatui and Span and Style are appropriately defined
+    let titles: Vec<Line> = app
         .titles
         .iter()
         .map(|t| {
             let (first, rest) = t.split_at(1);
             Line::from(vec![
-                Span::styled(first, Style::default().fg(cfg.highlight_background())), // CHANGE FOR CUSTOMIZATION
-                Span::styled(rest, Style::default().fg(cfg.highlight_background())), // These are tab highlights, first vs rest diff colors
+                Span::styled(first, Style::default().fg(cfg.highlight_background())),
+                Span::styled(rest, Style::default().fg(cfg.highlight_background())),
             ])
         })
         .collect();
+
 
     // Box Around Tab Items
     let tabs = Tabs::new(titles)
@@ -491,7 +498,14 @@ fn instructions_tab<B: Backend>(f: &mut Frame, app: &mut App, chunks: Rect, cfg:
         Row::new(cells).height(height as u16).bottom_margin(1)
     });
 
-    let t = Table::new(rows)
+    // Define the widths using an array of Constraint values
+    let widths = [
+        Constraint::Length(50),  // First column width
+        Constraint::Length(30),  // Second column width
+        Constraint::Min(10)      // Third column width, adjust according to your needs
+    ];
+
+    let t = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title("Controls"))
         .style(Style::default().fg(cfg.foreground()).bg(cfg.background()))
