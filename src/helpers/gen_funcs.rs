@@ -7,7 +7,7 @@ use std::{
 use std::sync::{Arc, Mutex};
 
 use glob::{glob_with, MatchOptions};
-use lofty::{Accessor, Probe, TaggedFileExt};
+use lofty::{prelude::*, probe::Probe};
 
 use log::error;
 use crate::requests::{PinepodsEpisodes, PinepodsPodcasts};
