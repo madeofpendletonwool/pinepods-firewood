@@ -143,6 +143,10 @@ impl TuiApp {
         let mut episodes_page = EpisodesPage::new(client.clone());
         episodes_page.set_audio_player(audio_player.clone());
         
+        // Create podcasts page and set up audio player
+        let mut podcasts_page = PodcastsPage::new(client.clone());
+        podcasts_page.set_audio_player(audio_player.clone());
+        
         Ok(Self {
             client: client.clone(),
             session_info,
@@ -152,7 +156,7 @@ impl TuiApp {
             audio_player: audio_player.clone(),
             
             home_page: HomePage::new(client.clone()),
-            podcasts_page: PodcastsPage::new(client.clone()),
+            podcasts_page,
             episodes_page,
             player_page: PlayerPage::new(audio_player),
             queue_page: QueuePage::new(client.clone()),
@@ -276,11 +280,19 @@ impl TuiApp {
     }
 
     async fn handle_tab_switch(&mut self) -> Result<()> {
-        // Auto-load episodes when switching to Episodes tab
-        if self.active_tab == AppTab::Episodes {
-            if let Err(e) = self.episodes_page.refresh().await {
-                self.show_error_message(&format!("Failed to load episodes: {}", e));
+        // Auto-load data when switching to specific tabs
+        match self.active_tab {
+            AppTab::Episodes => {
+                if let Err(e) = self.episodes_page.refresh().await {
+                    self.show_error_message(&format!("Failed to load episodes: {}", e));
+                }
             }
+            AppTab::Podcasts => {
+                if let Err(e) = self.podcasts_page.refresh().await {
+                    self.show_error_message(&format!("Failed to load podcasts: {}", e));
+                }
+            }
+            _ => {}
         }
         Ok(())
     }

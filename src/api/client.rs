@@ -99,13 +99,13 @@ impl PinepodsClient {
         Ok(response.pods)
     }
 
-    pub async fn get_podcast_episodes(&self, podcast_id: i64) -> Result<Vec<Episode>> {
+    pub async fn get_podcast_episodes(&self, podcast_id: i64) -> Result<Vec<PodcastEpisode>> {
         let request = EpisodeRequest {
             user_id: self.user_id() as i64,
             podcast_id,
         };
         
-        let response: EpisodesResponse = self.authenticated_post("/api/data/podcast_episodes", &request).await?;
+        let response: PodcastEpisodesResponse = self.authenticated_post("/api/data/podcast_episodes", &request).await?;
         Ok(response.episodes)
     }
 
