@@ -2,25 +2,19 @@ use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub struct Podcast {
-    #[serde(rename = "PodcastID")]
-    pub podcast_id: i64,
-    #[serde(rename = "PodcastName")]
-    pub podcast_name: String,
-    #[serde(rename = "ArtworkURL")]
-    pub artwork_url: String,
-    #[serde(rename = "Author")]
+    pub podcastid: i64,
+    pub podcastname: String,
+    pub artworkurl: String,
     pub author: String,
-    #[serde(rename = "Categories")]
-    pub categories: String,
-    #[serde(rename = "EpisodeCount")]
-    pub episode_count: u32,
-    #[serde(rename = "FeedURL")]
-    pub feed_url: String,
-    #[serde(rename = "WebsiteURL")]
-    pub website_url: String,
-    #[serde(rename = "Description")]
+    pub categories: serde_json::Value, // This can be an object or empty, so use Value
+    pub episodecount: u32,
+    pub feedurl: String,
+    pub websiteurl: String,
     pub description: String,
+    pub explicit: bool,
+    pub podcastindexid: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +49,61 @@ pub struct Episode {
     pub downloaded: Option<bool>,
     #[serde(rename = "is_youtube")]
     pub is_youtube: Option<bool>,
+}
+
+// Separate struct for podcast episodes endpoint which uses different casing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PodcastEpisode {
+    #[serde(rename = "podcastname")]
+    pub podcast_name: String,
+    #[serde(rename = "Episodetitle")]
+    pub episode_title: String,
+    #[serde(rename = "Episodepubdate")]
+    pub episode_pub_date: String,
+    #[serde(rename = "Episodedescription")]
+    pub episode_description: String,
+    #[serde(rename = "Episodeartwork")]
+    pub episode_artwork: String,
+    #[serde(rename = "Episodeurl")]
+    pub episode_url: String,
+    #[serde(rename = "Episodeduration")]
+    pub episode_duration: i64,
+    #[serde(rename = "Listenduration")]
+    pub listen_duration: Option<i64>,
+    #[serde(rename = "Episodeid")]
+    pub episode_id: Option<i64>,
+    #[serde(rename = "Completed")]
+    pub completed: bool,
+    #[serde(rename = "saved")]
+    pub saved: bool,
+    #[serde(rename = "queued")]
+    pub queued: bool,
+    #[serde(rename = "downloaded")]
+    pub downloaded: bool,
+    #[serde(rename = "is_youtube")]
+    pub is_youtube: bool,
+}
+
+impl From<PodcastEpisode> for Episode {
+    fn from(podcast_episode: PodcastEpisode) -> Self {
+        Episode {
+            episode_id: podcast_episode.episode_id,
+            podcast_id: None,
+            podcast_name: Some(podcast_episode.podcast_name),
+            episode_title: podcast_episode.episode_title,
+            episode_pub_date: podcast_episode.episode_pub_date,
+            episode_description: podcast_episode.episode_description,
+            episode_artwork: podcast_episode.episode_artwork,
+            episode_url: podcast_episode.episode_url,
+            episode_duration: podcast_episode.episode_duration,
+            listen_duration: podcast_episode.listen_duration,
+            completed: Some(podcast_episode.completed),
+            saved: Some(podcast_episode.saved),
+            queued: Some(podcast_episode.queued),
+            downloaded: Some(podcast_episode.downloaded),
+            is_youtube: Some(podcast_episode.is_youtube),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +236,11 @@ pub struct PodcastsResponse {
 #[derive(Debug, Deserialize)]
 pub struct EpisodesResponse {
     pub episodes: Vec<Episode>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PodcastEpisodesResponse {
+    pub episodes: Vec<PodcastEpisode>,
 }
 
 #[derive(Debug, Deserialize)]

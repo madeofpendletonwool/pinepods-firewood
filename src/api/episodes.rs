@@ -4,7 +4,8 @@ use anyhow::Result;
 impl PinepodsClient {
     /// Get all episodes for a specific podcast
     pub async fn get_episodes_for_podcast(&self, podcast_id: i64) -> Result<Vec<Episode>> {
-        self.get_podcast_episodes(podcast_id).await
+        let podcast_episodes = self.get_podcast_episodes(podcast_id).await?;
+        Ok(podcast_episodes.into_iter().map(|pe| pe.into()).collect())
     }
 
     /// Get episode by ID
