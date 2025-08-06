@@ -1,7 +1,9 @@
 use std::fs;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use ratatui::style::Color;
+use anyhow::Result;
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Theme {
@@ -187,4 +189,52 @@ impl Config {
     pub fn progress_bar(&self) -> u16 {
         self.progress_bar
     }
+}
+
+// Remote Control Configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteControlConfig {
+    /// Preferred port for remote control server
+    pub preferred_port: u16,
+    /// Whether to enable remote control server
+    pub enabled: bool,
+    /// Custom service name (optional)
+    pub service_name: Option<String>,
+}
+
+impl Default for RemoteControlConfig {
+    fn default() -> Self {
+        Self {
+            preferred_port: 8042,
+            enabled: true,
+            service_name: None,
+        }
+    }
+}
+
+/// Get the preferred port from various sources (env var, config file, default)
+pub fn get_preferred_remote_port() -> u16 {
+    // Priority: Environment variable > Default
+    if let Ok(env_port) = std::env::var("FIREWOOD_REMOTE_PORT") {
+        if let Ok(port) = env_port.parse::<u16>() {
+            log::info!("Using remote port from environment: {}", port);
+            return port;
+        }
+    }
+
+    // For now just return default, can extend later with config file support
+    8042
+}
+
+/// Check if remote control should be enabled
+pub fn is_remote_control_enabled() -> bool {
+    // Allow disabling via environment variable
+    if let Ok(env_disabled) = std::env::var("FIREWOOD_REMOTE_DISABLED") {
+        if env_disabled.to_lowercase() == "true" || env_disabled == "1" {
+            log::info!("Remote control disabled via environment variable");
+            return false;
+        }
+    }
+
+    true // Default to enabled
 }
