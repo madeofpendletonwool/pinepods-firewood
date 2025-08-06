@@ -14,6 +14,8 @@ use std::{
 
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
 use pinepods_firewood::tui::TuiApp;
+use pinepods_firewood::remote::RemoteControlServer;
+use pinepods_firewood::config::{get_preferred_remote_port, is_remote_control_enabled};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -112,30 +114,76 @@ async fn run_main_app<B: ratatui::prelude::Backend>(
     let tick_rate = Duration::from_millis(50);
     let mut last_tick = Instant::now();
     
-    loop {
-        terminal.draw(|f| app.render(f))?;
+    // Try to start the remote control server (optional)
+    let remote_handle = if is_remote_control_enabled() {
+        let client = app.client().clone();
+        let audio_player = app.audio_player().clone();
+        let preferred_port = get_preferred_remote_port();
         
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
+        match RemoteControlServer::new(
+            Some(audio_player),
+            Some(client),
+            Some(preferred_port),
+        ) {
+        Ok(mut remote_server) => {
+            let allocated_port = remote_server.get_port();
+            // Spawn the remote control server in the background
+            let handle = tokio::spawn(async move {
+                if let Err(e) = remote_server.start().await {
+                    log::error!("Remote control server failed: {}", e);
+                }
+            });
+            log::info!("Remote control server started on port {}", allocated_port);
+            Some(handle)
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to create remote control server: {}", e);
+            log::warn!("{}", error_msg);
+            app.show_error_message(&error_msg);
+            log::info!("Continuing without remote control functionality");
+            None
+        }
+        }
+    } else {
+        log::info!("Remote control server disabled via configuration");
+        None
+    };
+    
+    log::info!("Use Ctrl+C or 'q' to quit");
+    
+    // Main TUI loop
+    let main_result = async {
+        loop {
+            terminal.draw(|f| app.render(f))?;
             
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    app.handle_input(key).await?;
-                    
-                    if app.should_quit() {
-                        break;
+            let timeout = tick_rate
+                .checked_sub(last_tick.elapsed())
+                .unwrap_or_else(|| Duration::from_secs(0));
+                
+            if crossterm::event::poll(timeout)? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        app.handle_input(key).await?;
+                        
+                        if app.should_quit() {
+                            break;
+                        }
                     }
                 }
             }
+            
+            if last_tick.elapsed() >= tick_rate {
+                app.update().await?;
+                last_tick = Instant::now();
+            }
         }
-        
-        if last_tick.elapsed() >= tick_rate {
-            app.update().await?;
-            last_tick = Instant::now();
-        }
+        Ok::<(), anyhow::Error>(())
+    }.await;
+    
+    // Cancel the remote control server if it was started
+    if let Some(handle) = remote_handle {
+        handle.abort();
     }
     
-    Ok(())
+    main_result
 }

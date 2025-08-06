@@ -179,6 +179,14 @@ impl TuiApp {
         self.should_quit
     }
 
+    pub fn client(&self) -> &PinepodsClient {
+        &self.client
+    }
+
+    pub fn audio_player(&self) -> &AudioPlayer {
+        &self.audio_player
+    }
+
     pub async fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         if key.kind != KeyEventKind::Press {
             return Ok(());
@@ -302,11 +310,11 @@ impl TuiApp {
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),  // Header with tabs
-                Constraint::Min(0),     // Content
+                Constraint::Min(5),     // Content (minimum height to prevent overlap)
                 Constraint::Length(3),  // Micro-player
                 Constraint::Length(3),  // Footer with shortcuts
             ])
-            .split(frame.size());
+            .split(frame.area());
 
         // Render header with tabs
         self.render_header(frame, main_layout[0]);
@@ -331,7 +339,7 @@ impl TuiApp {
         self.render_footer(frame, main_layout[3]);
 
         // Render messages overlay if needed
-        self.render_messages_overlay(frame, frame.size());
+        self.render_messages_overlay(frame, frame.area());
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
@@ -533,26 +541,49 @@ impl TuiApp {
 
     fn render_messages_overlay(&self, frame: &mut Frame, area: Rect) {
         let message = if let Some(error) = &self.error_message {
-            Some((format!("❌ {}", error), Color::Red))
+            Some((format!("❌ {}", error), Color::Red, "Error"))
         } else if let Some(success) = &self.success_message {
-            Some((format!("✅ {}", success), Color::Green))
+            Some((format!("✅ {}", success), Color::Green, "Success"))
         } else {
             None
         };
 
-        if let Some((text, color)) = message {
-            let message_area = Rect {
-                x: area.x + 4,
-                y: area.y + 1,
-                width: area.width.saturating_sub(8),
-                height: 1,
-            };
+        if let Some((text, color, title)) = message {
+            // Create a larger popup for better error display
+            let popup_area = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Percentage(20),
+                    Constraint::Length(8),  // Fixed height popup
+                    Constraint::Percentage(20),
+                ])
+                .split(area)[1];
+
+            let popup_area = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Percentage(10),
+                    Constraint::Percentage(80),
+                    Constraint::Percentage(10),
+                ])
+                .split(popup_area)[1];
+
+            frame.render_widget(ratatui::widgets::Clear, popup_area);
 
             let message_widget = ratatui::widgets::Paragraph::new(text)
                 .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-                .alignment(ratatui::layout::Alignment::Center);
+                .alignment(ratatui::layout::Alignment::Left)
+                .wrap(ratatui::widgets::Wrap { trim: true })
+                .block(
+                    ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL)
+                        .border_type(ratatui::widgets::BorderType::Rounded)
+                        .title(format!("{} (Press any key to dismiss)", title))
+                        .border_style(Style::default().fg(color))
+                        .style(Style::default().bg(Color::Black))
+                );
 
-            frame.render_widget(message_widget, message_area);
+            frame.render_widget(message_widget, popup_area);
         }
     }
 
