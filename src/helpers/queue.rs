@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lofty::{AudioFile, Probe};
+use lofty::{prelude::*, probe::Probe};
 use ratatui::widgets::ListState;
 use crate::requests::PinepodsEpisodes;
 

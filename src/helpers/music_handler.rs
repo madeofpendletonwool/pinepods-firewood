@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use lofty::{AudioFile, Probe};
+use lofty::{prelude::*, probe::Probe};
 use log::error;
 use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
 use crate::requests::PinepodsEpisodes;

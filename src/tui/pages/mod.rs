@@ -1,0 +1,19 @@
+pub mod home;
+pub mod podcasts;
+pub mod episodes;
+pub mod queue;
+pub mod saved;
+pub mod downloads;
+pub mod search;
+pub mod settings;
+pub mod player;
+
+pub use home::HomePage;
+pub use podcasts::PodcastsPage;
+pub use episodes::EpisodesPage;
+pub use queue::QueuePage;
+pub use saved::SavedPage;
+pub use downloads::DownloadsPage;
+pub use search::SearchPage;
+pub use settings::SettingsPage;
+pub use player::PlayerPage;
