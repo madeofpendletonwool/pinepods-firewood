@@ -289,6 +289,12 @@ impl TuiApp {
                     // Also update all other pages
                     self.home_page.update_theme(&current_theme);
                     self.podcasts_page.update_theme(&current_theme);
+                    self.episodes_page.update_theme(&current_theme);
+                    self.player_page.update_theme(&current_theme);
+                    self.queue_page.update_theme(&current_theme);
+                    self.saved_page.update_theme(&current_theme);
+                    self.downloads_page.update_theme(&current_theme);
+                    self.search_page.update_theme(&current_theme);
                 }
             },
         }
@@ -766,6 +772,12 @@ impl TuiApp {
                     self.settings_page.update_theme(&server_theme);
                     self.home_page.update_theme(&server_theme);
                     self.podcasts_page.update_theme(&server_theme);
+                    self.episodes_page.update_theme(&server_theme);
+                    self.player_page.update_theme(&server_theme);
+                    self.queue_page.update_theme(&server_theme);
+                    self.saved_page.update_theme(&server_theme);
+                    self.downloads_page.update_theme(&server_theme);
+                    self.search_page.update_theme(&server_theme);
                 } else {
                     log::warn!("Could not update local settings with server theme");
                 }

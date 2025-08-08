@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::api::{PinepodsClient, QueueItem};
+use crate::theme::ThemeManager;
 
 pub struct QueuePage {
     client: PinepodsClient,
@@ -27,6 +28,9 @@ pub struct QueuePage {
     // Actions
     show_actions: bool,
     selected_action: usize,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl QueuePage {
@@ -43,6 +47,7 @@ impl QueuePage {
             error_message: None,
             show_actions: false,
             selected_action: 0,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -194,6 +199,11 @@ impl QueuePage {
         // Auto-refresh every minute
         // TODO: Implement auto-refresh logic
         Ok(())
+    }
+    
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
     }
 
     async fn remove_from_queue(&mut self, episode_id: i64) -> Result<()> {
@@ -351,15 +361,16 @@ impl QueuePage {
 
                 let status = format!(" {}", indicators.join(" "));
 
+                let theme_colors = self.theme_manager.get_colors();
                 let line1 = Line::from(vec![
-                    Span::styled(&item.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(&item.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(&item.podcast_name, Style::default().fg(Color::Cyan)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                    Span::styled(&item.podcast_name, Style::default().fg(theme_colors.accent)),
+                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -371,19 +382,21 @@ impl QueuePage {
                           self.queue_items.len(),
                           format_duration(total_duration));
 
+        let theme_colors = self.theme_manager.get_colors();
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title(title)
+                    .title(format!("📝 {}", title))
                     .title_alignment(Alignment::Center)
-                    .border_style(Style::default().fg(Color::Green))
+                    .border_style(Style::default().fg(theme_colors.primary))
+                    .title_style(Style::default().fg(theme_colors.accent))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Green)
-                    .fg(Color::Black)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -392,23 +405,29 @@ impl QueuePage {
     }
 
     fn render_empty_queue(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let empty_text = vec![
-            Line::from("📝 Your queue is empty"),
+            Line::from(vec![Span::styled("📝 Your queue is empty", Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))]),
             Line::from(""),
-            Line::from("Add episodes to your queue from:"),
-            Line::from("• Episode lists"),
-            Line::from("• Search results"),
-            Line::from("• Podcast pages"),
+            Line::from(vec![Span::styled("Add episodes to your queue from:", Style::default().fg(theme_colors.text))]),
+            Line::from(vec![Span::styled("• Episode lists", Style::default().fg(theme_colors.text_secondary))]),
+            Line::from(vec![Span::styled("• Search results", Style::default().fg(theme_colors.text_secondary))]),
+            Line::from(vec![Span::styled("• Podcast pages", Style::default().fg(theme_colors.text_secondary))]),
             Line::from(""),
-            Line::from("Press 'a' on any episode to add it to your queue"),
+            Line::from(vec![
+                Span::styled("Press ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("'a'", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" on any episode to add it to your queue", Style::default().fg(theme_colors.text_secondary)),
+            ]),
         ];
 
         let empty_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Empty Queue")
+            .title("📝 Empty Queue")
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(Color::Blue));
+            .border_style(Style::default().fg(theme_colors.border))
+            .title_style(Style::default().fg(theme_colors.accent));
 
         let empty_paragraph = Paragraph::new(empty_text)
             .alignment(Alignment::Center)
@@ -419,34 +438,36 @@ impl QueuePage {
     }
 
     fn render_help(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let help_text = vec![
             Line::from(vec![
-                Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Play  "),
-                Span::styled("Space", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Actions  "),
-                Span::styled("r", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Remove  "),
-                Span::styled("c", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Clear  "),
-                Span::styled("s", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Shuffle"),
+                Span::styled("Enter", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Play  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("Space", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Actions  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("r", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Remove  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("c", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Clear  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("s", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Shuffle", Style::default().fg(theme_colors.text_secondary)),
             ]),
             Line::from(vec![
-                Span::styled("t", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Move to top  "),
-                Span::styled("b", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Move to bottom  "),
-                Span::styled("F5", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Refresh"),
+                Span::styled("t", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Move to top  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("b", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Move to bottom  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("F5", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Refresh", Style::default().fg(theme_colors.text_secondary)),
             ]),
         ];
 
         let help_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
-            .title("Controls")
-            .border_style(Style::default().fg(Color::Blue));
+            .title("🔧 Controls")
+            .border_style(Style::default().fg(theme_colors.border))
+            .title_style(Style::default().fg(theme_colors.accent));
 
         let help_paragraph = Paragraph::new(help_text)
             .alignment(Alignment::Left)
@@ -456,6 +477,7 @@ impl QueuePage {
     }
 
     fn render_actions_modal(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -490,9 +512,9 @@ impl QueuePage {
             .enumerate()
             .map(|(i, action)| {
                 let style = if i == self.selected_action {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme_colors.warning).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme_colors.text)
                 };
                 ListItem::new(Text::from(*action)).style(style)
             })
@@ -503,15 +525,16 @@ impl QueuePage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Actions")
+                    .title("⚡ Actions")
                     .title_alignment(Alignment::Center)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Cyan)
-                    .fg(Color::Black)
+                    .bg(theme_colors.primary)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -520,31 +543,35 @@ impl QueuePage {
     }
 
     fn render_loading(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let loading_text = Paragraph::new("🔄 Loading queue...")
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(theme_colors.accent))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Loading")
-                    .border_style(Style::default().fg(Color::Yellow))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(loading_text, area);
     }
 
     fn render_error(&self, frame: &mut Frame, area: Rect, error: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let error_text = Paragraph::new(format!("❌ {}\n\nPress F5 to retry", error))
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(theme_colors.error))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true })
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Error")
-                    .border_style(Style::default().fg(Color::Red))
+                    .title("❌ Error")
+                    .border_style(Style::default().fg(theme_colors.error))
+                    .title_style(Style::default().fg(theme_colors.error))
             );
 
         frame.render_widget(error_text, area);

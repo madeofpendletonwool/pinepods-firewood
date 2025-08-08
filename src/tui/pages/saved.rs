@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::api::{PinepodsClient, Episode};
 use crate::audio::AudioPlayer;
+use crate::theme::ThemeManager;
 
 pub struct SavedPage {
     client: PinepodsClient,
@@ -28,6 +29,9 @@ pub struct SavedPage {
     
     // Audio player
     audio_player: Option<AudioPlayer>,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl SavedPage {
@@ -43,6 +47,7 @@ impl SavedPage {
             error_message: None,
             last_update: Instant::now(),
             audio_player: None,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -169,6 +174,11 @@ impl SavedPage {
         self.last_update = Instant::now();
         Ok(())
     }
+    
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::default()
@@ -192,17 +202,19 @@ impl SavedPage {
     }
 
     fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if self.saved_episodes.is_empty() && !self.loading {
             let empty_msg = "No saved episodes found.\nPress 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title("⭐ Saved Episodes")
-                        .border_style(Style::default().fg(Color::Yellow))
+                        .border_style(Style::default().fg(theme_colors.warning))
+                        .title_style(Style::default().fg(theme_colors.warning))
                 );
             frame.render_widget(empty, area);
             return;
@@ -233,14 +245,14 @@ impl SavedPage {
                 let status = format!(" {}", indicators.join(" "));
 
                 let line1 = Line::from(vec![
-                    Span::styled(&episode.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(&episode.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(podcast_name, Style::default().fg(Color::Cyan)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                    Span::styled(podcast_name, Style::default().fg(theme_colors.accent)),
+                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -253,11 +265,13 @@ impl SavedPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("⭐ Saved Episodes")
-                    .border_style(Style::default().fg(Color::Yellow))
+                    .border_style(Style::default().fg(theme_colors.warning))
+                    .title_style(Style::default().fg(theme_colors.warning))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -266,6 +280,7 @@ impl SavedPage {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let controls = vec![
             ("↑↓/jk", "Navigate"),
             ("Enter", "Play"),
@@ -278,8 +293,8 @@ impl SavedPage {
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
                 ];
                 
                 if i < controls.len() - 1 {
@@ -296,7 +311,9 @@ impl SavedPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Blue))
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(footer, area);
@@ -311,9 +328,9 @@ impl SavedPage {
             };
             
             let color = if error.starts_with("✅") || error.starts_with("🎵") {
-                Color::Green
+                theme_colors.success
             } else {
-                Color::Red
+                theme_colors.error
             };
             
             let error_msg = Paragraph::new(error.as_str())
@@ -324,6 +341,7 @@ impl SavedPage {
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect, message: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -345,14 +363,14 @@ impl SavedPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
     }
