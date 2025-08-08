@@ -100,12 +100,8 @@ impl PinepodsClient {
     }
 
     pub async fn get_podcast_episodes(&self, podcast_id: i64) -> Result<Vec<PodcastEpisode>> {
-        let request = EpisodeRequest {
-            user_id: self.user_id() as i64,
-            podcast_id,
-        };
-        
-        let response: PodcastEpisodesResponse = self.authenticated_post("/api/data/podcast_episodes", &request).await?;
+        let endpoint = format!("/api/data/podcast_episodes?user_id={}&podcast_id={}", self.user_id(), podcast_id);
+        let response: PodcastEpisodesResponse = self.authenticated_get(&endpoint).await?;
         Ok(response.episodes)
     }
 
@@ -166,7 +162,7 @@ impl PinepodsClient {
     pub async fn get_saved_episodes(&self) -> Result<Vec<Episode>> {
         let endpoint = format!("/api/data/saved_episode_list/{}", self.user_id());
         let response: SavedEpisodesResponse = self.authenticated_get(&endpoint).await?;
-        Ok(response.episodes)
+        Ok(response.saved_episodes)
     }
 
     pub async fn save_episode(&self, episode_id: i64) -> Result<SimpleResponse> {
@@ -191,7 +187,7 @@ impl PinepodsClient {
     pub async fn get_downloads(&self) -> Result<Vec<DownloadItem>> {
         let endpoint = format!("/api/data/download_episode_list?user_id={}", self.user_id());
         let response: DownloadsResponse = self.authenticated_get(&endpoint).await?;
-        Ok(response.downloads)
+        Ok(response.downloaded_episodes)
     }
 
     pub async fn download_episode(&self, episode_id: i64) -> Result<SimpleResponse> {
@@ -244,5 +240,16 @@ impl PinepodsClient {
         let endpoint = format!("/api/data/search_podcasts?q={}", urlencoding::encode(query));
         let response: PodcastsResponse = self.authenticated_get(&endpoint).await?;
         Ok(response.pods)
+    }
+
+    // Search all data (episodes and podcasts combined)
+    pub async fn search_data(&self, search_term: &str) -> Result<Vec<super::SearchResultItem>> {
+        let request = super::SearchRequest {
+            search_term: search_term.to_string(),
+            user_id: self.user_id() as i64,
+        };
+        
+        let response: super::SearchResponse = self.authenticated_post("/api/data/search_data", &request).await?;
+        Ok(response.data)
     }
 }

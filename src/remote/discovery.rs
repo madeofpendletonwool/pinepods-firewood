@@ -56,9 +56,14 @@ impl DiscoveryService {
 
     pub fn unregister_service(&mut self) -> Result<()> {
         if let Some(service_info) = &self.service_info {
-            self.daemon.unregister(service_info.get_fullname())?;
+            // Try to unregister but ignore errors since we're likely shutting down
+            if let Err(e) = self.daemon.unregister(service_info.get_fullname()) {
+                // Only log debug level during shutdown to reduce noise
+                log::debug!("mDNS unregistration failed (expected during shutdown): {}", e);
+            } else {
+                log::info!("Unregistered mDNS service");
+            }
             self.service_info = None;
-            log::info!("Unregistered mDNS service");
         }
         Ok(())
     }
@@ -66,6 +71,7 @@ impl DiscoveryService {
 
 impl Drop for DiscoveryService {
     fn drop(&mut self) {
+        // Try graceful unregistration but don't log errors during shutdown
         let _ = self.unregister_service();
     }
 }

@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use lofty::file::AudioFile;
 use tower::ServiceBuilder;
 
 use crate::audio::AudioPlayer;
@@ -99,7 +100,8 @@ impl RemoteControlServer {
         Ok(())
     }
 
-    pub fn stop(&mut self) -> Result<()> {
+    pub async fn stop(&mut self) -> Result<()> {
+        log::info!("Stopping remote control server...");
         self.discovery.unregister_service()?;
         Ok(())
     }
@@ -205,7 +207,28 @@ async fn play_episode(
     Json(request): Json<PlayEpisodeRequest>,
 ) -> Json<RemoteResponse<()>> {
     if let Some(ref player) = state.audio_player {
-        // Convert the request to an Episode
+        // Parse duration if not provided
+        let episode_duration = match request.episode_duration {
+            Some(duration) => {
+                log::info!("Using provided duration: {} seconds", duration);
+                duration
+            }
+            None => {
+                log::info!("Duration not provided, parsing from audio file...");
+                match parse_audio_duration(&request.episode_url).await {
+                    Ok(duration) => {
+                        log::info!("Parsed duration from audio: {} seconds", duration);
+                        duration
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to parse duration: {}, using fallback", e);
+                        1800 // 30 minutes fallback
+                    }
+                }
+            }
+        };
+        
+        // Convert the request to an Episode with defaults for optional fields
         let episode = Episode {
             episode_id: request.episode_id,
             podcast_id: None,
@@ -215,7 +238,7 @@ async fn play_episode(
             episode_description: String::new(), // Not needed for playback
             episode_artwork: request.episode_artwork.unwrap_or_default(),
             episode_url: request.episode_url,
-            episode_duration: request.episode_duration,
+            episode_duration,
             listen_duration: request.start_position,
             completed: None,
             saved: None,
@@ -239,6 +262,74 @@ async fn play_episode(
     } else {
         Json(RemoteResponse::error("Audio player not available".to_string()))
     }
+}
+
+async fn parse_audio_duration(url: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+    use std::io::Cursor;
+    
+    log::info!("Parsing audio duration from: {}", url);
+    
+    // Download first 256KB to get better metadata parsing
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header("Range", "bytes=0-262143") // 256KB
+        .send()
+        .await?;
+    
+    if !response.status().is_success() {
+        log::warn!("Failed to fetch audio metadata, status: {}", response.status());
+        return Err("Failed to fetch audio data".into());
+    }
+    
+    let bytes = response.bytes().await?;
+    log::info!("Downloaded {} bytes for metadata parsing", bytes.len());
+    
+    let cursor = Cursor::new(bytes);
+    
+    // Try to parse with lofty
+    match lofty::probe::Probe::new(cursor).guess_file_type() {
+        Ok(probe) => {
+            match probe.read() {
+                Ok(tagged_file) => {
+                    let properties = tagged_file.properties();
+                    let duration = properties.duration();
+                    let duration_secs = duration.as_secs();
+                    
+                    log::info!("Lofty parsed duration: {} seconds ({} minutes)", duration_secs, duration_secs / 60);
+                    
+                    if duration_secs > 0 {
+                        return Ok(duration_secs as i64);
+                    } else {
+                        log::warn!("Lofty returned zero duration");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("Lofty failed to read tagged file: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("Lofty failed to guess file type: {}", e);
+        }
+    }
+    
+    // Fallback to file size estimation
+    log::info!("Attempting file size based duration estimation");
+    let head_response = client.head(url).send().await?;
+    if let Some(content_length) = head_response.headers().get("content-length") {
+        if let Ok(size_str) = content_length.to_str() {
+            if let Ok(size_bytes) = size_str.parse::<u64>() {
+                // Estimate based on typical MP3 bitrate (128kbps = 16KB/s)
+                let estimated_duration = size_bytes / 16000; // Rough estimate
+                log::info!("File size: {} bytes, estimated duration: {} seconds ({} minutes)", 
+                          size_bytes, estimated_duration, estimated_duration / 60);
+                return Ok(estimated_duration as i64);
+            }
+        }
+    }
+    
+    Err("Could not determine audio duration from metadata or file size".into())
 }
 
 async fn pause_playback(
@@ -305,18 +396,10 @@ async fn seek_to_position(
     Json(request): Json<SeekRequest>,
 ) -> Json<RemoteResponse<()>> {
     if let Some(ref player) = state.audio_player {
-        // For now, we'll use skip to approximate seeking
-        let current_state = player.get_state();
-        let current_pos = current_state.current_position.as_secs() as i64;
-        let skip_amount = request.position - current_pos;
+        // Use the seek method which properly restarts playback at the new position
+        let seek_position = std::time::Duration::from_secs(request.position as u64);
         
-        let result = if skip_amount > 0 {
-            player.skip_forward(std::time::Duration::from_secs(skip_amount as u64))
-        } else {
-            player.skip_backward(std::time::Duration::from_secs((-skip_amount) as u64))
-        };
-        
-        match result {
+        match player.seek(seek_position) {
             Ok(_) => Json(RemoteResponse::<()>::simple_success()),
             Err(e) => Json(RemoteResponse::error(format!("Failed to seek: {}", e))),
         }

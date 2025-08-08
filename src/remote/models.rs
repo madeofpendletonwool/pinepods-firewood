@@ -14,7 +14,7 @@ pub struct PlayEpisodeRequest {
     pub episode_url: String,
     pub episode_title: String,
     pub podcast_name: String,
-    pub episode_duration: i64,
+    pub episode_duration: Option<i64>,
     pub episode_artwork: Option<String>,
     pub start_position: Option<i64>, // Resume from specific position in seconds
 }

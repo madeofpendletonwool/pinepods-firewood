@@ -127,6 +127,9 @@ pub struct TuiApp {
     success_message: Option<String>,
     message_timeout: Option<Instant>,
     
+    // Tab scrolling state
+    tab_scroll_offset: usize,
+    
     // Animation
     animation_frame: usize,
     last_animation_update: Instant,
@@ -170,6 +173,8 @@ impl TuiApp {
             success_message: None,
             message_timeout: None,
             
+            tab_scroll_offset: 0,
+            
             animation_frame: 0,
             last_animation_update: Instant::now(),
         })
@@ -211,12 +216,14 @@ impl TuiApp {
             (KeyModifiers::NONE, KeyCode::Tab) => {
                 self.active_tab = self.active_tab.next();
                 self.clear_messages();
+                self.update_tab_scroll();
                 self.handle_tab_switch().await?;
                 return Ok(());
             }
             (KeyModifiers::SHIFT, KeyCode::BackTab) => {
                 self.active_tab = self.active_tab.previous();
                 self.clear_messages();
+                self.update_tab_scroll();
                 self.handle_tab_switch().await?;
                 return Ok(());
             }
@@ -233,6 +240,7 @@ impl TuiApp {
                 if digit >= 1 && digit <= 9 {
                     self.active_tab = AppTab::from_index((digit - 1) as usize);
                     self.clear_messages();
+                    self.update_tab_scroll();
                     self.handle_tab_switch().await?;
                     return Ok(());
                 }
@@ -342,8 +350,8 @@ impl TuiApp {
         self.render_messages_overlay(frame, frame.area());
     }
 
-    fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let tabs = [
+    fn render_header(&mut self, frame: &mut Frame, area: Rect) {
+        let all_tabs = [
             AppTab::Home,
             AppTab::Podcasts,
             AppTab::Episodes,
@@ -355,13 +363,52 @@ impl TuiApp {
             AppTab::Settings,
         ];
 
-        let titles: Vec<Line> = tabs
+        // Calculate how many tabs can fit based on terminal width
+        let available_width = area.width.saturating_sub(2) as usize; // Account for borders only
+        
+        // Calculate approximate width per tab (icon + space + title + shortcut + padding)
+        let avg_tab_width = 14; // More accurate estimate: icon(2) + space(1) + title(6-8) + shortcut(2) + padding(2)
+        let max_visible_tabs = (available_width / avg_tab_width).max(1).min(all_tabs.len());
+        
+        // Simple scrolling: show a window of tabs based on scroll offset
+        let visible_count = max_visible_tabs;
+        let active_index = self.active_tab as usize;
+        
+        // Adjust scroll offset to ensure active tab is visible
+        let mut scroll_offset = self.tab_scroll_offset;
+        let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
+        let end_idx = (start_idx + visible_count).min(all_tabs.len());
+        
+        // If active tab is outside the visible window, adjust scroll offset
+        if active_index < start_idx {
+            scroll_offset = active_index;
+        } else if active_index >= end_idx {
+            scroll_offset = active_index.saturating_sub(visible_count - 1);
+        }
+        
+        // Ensure scroll offset doesn't go beyond valid range
+        let max_scroll = all_tabs.len().saturating_sub(visible_count);
+        if scroll_offset > max_scroll {
+            scroll_offset = max_scroll;
+        }
+        
+        // Update the stored scroll offset and recalculate
+        self.tab_scroll_offset = scroll_offset;
+        let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
+        let end_idx = (start_idx + visible_count).min(all_tabs.len());
+        
+        let visible_tabs = &all_tabs[start_idx..end_idx];
+        let show_left_arrow = start_idx > 0;
+        let show_right_arrow = end_idx < all_tabs.len();
+
+        let titles: Vec<Line> = visible_tabs
             .iter()
             .enumerate()
-            .map(|(i, tab)| {
+            .map(|(visible_idx, tab)| {
+                let actual_idx = start_idx + visible_idx;
                 let icon = tab.icon();
                 let title = tab.title();
-                let shortcut = format!(" {}", i + 1);
+                let shortcut = format!(" {}", actual_idx + 1);
                 
                 Line::from(vec![
                     Span::raw(icon),
@@ -372,17 +419,38 @@ impl TuiApp {
             })
             .collect();
 
+        // Create tabs widget with arrow indicators in title
+        let tab_title = if show_left_arrow && show_right_arrow {
+            format!("◀ 🌲 Pinepods Firewood - {} ▶", 
+                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+        } else if show_left_arrow {
+            format!("◀ 🌲 Pinepods Firewood - {} ", 
+                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+        } else if show_right_arrow {
+            format!(" 🌲 Pinepods Firewood - {} ▶", 
+                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+        } else {
+            format!(" 🌲 Pinepods Firewood - {} ", 
+                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+        };
+
+        // Find which visible tab is the active one
+        let active_idx = self.active_tab as usize;
+        let selected_index = if active_idx >= start_idx && active_idx < end_idx {
+            active_idx - start_idx
+        } else {
+            0
+        };
+
         let tabs_widget = Tabs::new(titles)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .style(Style::default().fg(Color::Green))
-                    .title(format!(" 🌲 Pinepods Firewood - {} ", 
-                                  self.session_info.auth_state.user_details.Username
-                                      .as_deref().unwrap_or("User")))
+                    .title(tab_title)
             )
-            .select(self.active_tab as usize)
+            .select(selected_index)
             .style(Style::default().fg(Color::Gray))
             .highlight_style(
                 Style::default()
@@ -643,5 +711,21 @@ impl TuiApp {
         self.downloads_page.initialize().await?;
         
         Ok(())
+    }
+
+
+    fn update_tab_scroll(&mut self) {
+        // This method will be called during tab switching, but we need the terminal width
+        // to calculate visible_count. For now, we'll use a simple approach that works
+        // with the render method's calculations. The actual scroll adjustment happens
+        // in render_header when we know the available width.
+        
+        let total_tabs: usize = 9; // Total number of tabs
+        let active_index = self.active_tab as usize;
+        
+        // Basic bounds checking - the render method will do the real work
+        if self.tab_scroll_offset > total_tabs.saturating_sub(1) {
+            self.tab_scroll_offset = total_tabs.saturating_sub(1);
+        }
     }
 }

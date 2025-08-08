@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::api::{PinepodsClient, Podcast, PodcastEpisode, Episode};
 use crate::audio::AudioPlayer;
+use crate::settings::SettingsManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FocusPanel {
@@ -39,12 +40,20 @@ pub struct PodcastsPage {
     
     // Audio player
     audio_player: Option<AudioPlayer>,
+    
+    // Settings
+    settings_manager: SettingsManager,
 }
 
 impl PodcastsPage {
     pub fn new(client: PinepodsClient) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));
+        
+        let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
+            log::error!("Failed to create settings manager: {}", e);
+            SettingsManager::new().expect("Failed to create fallback settings manager")
+        });
         
         Self {
             client,
@@ -59,6 +68,7 @@ impl PodcastsPage {
             selected_podcast_id: None,
             last_update: Instant::now(),
             audio_player: None,
+            settings_manager,
         }
     }
 
@@ -152,6 +162,13 @@ impl PodcastsPage {
                         if let Some(selected) = self.podcast_list_state.selected() {
                             if selected < self.podcasts.len().saturating_sub(1) {
                                 self.podcast_list_state.select(Some(selected + 1));
+                                
+                                // Auto-load episodes if setting is enabled
+                                if self.settings_manager.auto_load_episodes() {
+                                    if let Some(podcast) = self.podcasts.get(selected + 1) {
+                                        let _ = self.load_podcast_episodes(podcast.podcastid).await;
+                                    }
+                                }
                             }
                         }
                     }
@@ -170,6 +187,13 @@ impl PodcastsPage {
                         if let Some(selected) = self.podcast_list_state.selected() {
                             if selected > 0 {
                                 self.podcast_list_state.select(Some(selected - 1));
+                                
+                                // Auto-load episodes if setting is enabled
+                                if self.settings_manager.auto_load_episodes() {
+                                    if let Some(podcast) = self.podcasts.get(selected - 1) {
+                                        let _ = self.load_podcast_episodes(podcast.podcastid).await;
+                                    }
+                                }
                             }
                         }
                     }

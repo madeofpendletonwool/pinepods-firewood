@@ -68,7 +68,7 @@ impl PinepodsClient {
         let endpoint = format!("/api/data/downloads_by_status/{}?status={}", 
                               self.user_id(), status);
         let response: super::DownloadsResponse = self.authenticated_get(&endpoint).await?;
-        Ok(response.downloads)
+        Ok(response.downloaded_episodes)
     }
 
     /// Get available storage space
