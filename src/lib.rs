@@ -6,6 +6,7 @@ pub mod audio;
 pub mod remote;
 pub mod config;
 pub mod settings;
+pub mod theme;
 
 // Re-export for backwards-compatibility.
 pub use helpers::*;

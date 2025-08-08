@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::api::PinepodsClient;
 use crate::settings::{SettingsManager, get_available_audio_devices};
+use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingItem {
@@ -20,7 +21,7 @@ enum SettingItem {
     AudioDevice,
     RemoteControlEnabled,
     RemoteControlPort,
-    ThemeAccentColor,
+    Theme,
     UseBorders,
 }
 
@@ -33,7 +34,7 @@ impl SettingItem {
             Self::AudioDevice => "Audio Output Device",
             Self::RemoteControlEnabled => "Remote Control",
             Self::RemoteControlPort => "Remote Control Port",
-            Self::ThemeAccentColor => "Accent Color",
+            Self::Theme => "Theme",
             Self::UseBorders => "Use Borders",
         }
     }
@@ -46,7 +47,7 @@ impl SettingItem {
             Self::AudioDevice => "Select audio output device",
             Self::RemoteControlEnabled => "Enable remote control HTTP server",
             Self::RemoteControlPort => "Port for remote control server",
-            Self::ThemeAccentColor => "Theme accent color",
+            Self::Theme => "Application theme (Nordic, Abyss, Light)",
             Self::UseBorders => "Display borders around UI elements",
         }
     }
@@ -59,7 +60,7 @@ const ALL_SETTINGS: &[SettingItem] = &[
     SettingItem::AudioDevice,
     SettingItem::RemoteControlEnabled,
     SettingItem::RemoteControlPort,
-    SettingItem::ThemeAccentColor,
+    SettingItem::Theme,
     SettingItem::UseBorders,
 ];
 
@@ -76,6 +77,15 @@ pub struct SettingsPage {
     
     // Audio device management
     available_audio_devices: Vec<(String, String)>,
+    
+    // Theme management
+    theme_manager: crate::theme::ThemeManager,
+    theme_selector_open: bool,
+    theme_selector_state: ListState,
+    
+    // Audio device selector  
+    audio_selector_open: bool,
+    audio_selector_state: ListState,
     
     // Animation
     last_update: Instant,
@@ -94,6 +104,18 @@ impl SettingsPage {
         
         let available_audio_devices = get_available_audio_devices();
         
+        // Initialize theme manager with current theme from settings
+        let mut theme_manager = crate::theme::ThemeManager::new();
+        theme_manager.set_theme(settings_manager.theme_name());
+        
+        // Initialize theme selector state
+        let mut theme_selector_state = ListState::default();
+        theme_selector_state.select(Some(0));
+        
+        // Initialize audio selector state
+        let mut audio_selector_state = ListState::default();
+        audio_selector_state.select(Some(0));
+        
         Self {
             client,
             settings_manager,
@@ -101,6 +123,11 @@ impl SettingsPage {
             error_message: None,
             success_message: None,
             available_audio_devices,
+            theme_manager,
+            theme_selector_open: false,
+            theme_selector_state,
+            audio_selector_open: false,
+            audio_selector_state,
             last_update: Instant::now(),
         }
     }
@@ -120,6 +147,15 @@ impl SettingsPage {
         // Clear messages on any input
         self.error_message = None;
         self.success_message = None;
+
+        // Handle popup inputs first
+        if self.theme_selector_open {
+            return self.handle_theme_selector_input(key).await;
+        }
+        
+        if self.audio_selector_open {
+            return self.handle_audio_selector_input(key).await;
+        }
 
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
@@ -189,7 +225,10 @@ impl SettingsPage {
                         }
                     }
                     SettingItem::AudioDevice => {
-                        self.cycle_audio_device().await?;
+                        self.open_audio_selector();
+                    }
+                    SettingItem::Theme => {
+                        self.open_theme_selector();
                     }
                     SettingItem::UseBorders => {
                         let result = self.settings_manager.update(|s| {
@@ -246,7 +285,10 @@ impl SettingsPage {
                         }
                     }
                     SettingItem::AudioDevice => {
-                        self.cycle_audio_device().await?;
+                        self.open_audio_selector();
+                    }
+                    SettingItem::Theme => {
+                        self.open_theme_selector();
                     }
                     _ => {}
                 }
@@ -290,50 +332,15 @@ impl SettingsPage {
                         }
                     }
                     SettingItem::AudioDevice => {
-                        self.cycle_audio_device().await?;
+                        self.open_audio_selector();
+                    }
+                    SettingItem::Theme => {
+                        self.open_theme_selector();
                     }
                     _ => {}
                 }
             }
         }
-        Ok(())
-    }
-
-    async fn cycle_audio_device(&mut self) -> Result<()> {
-        if self.available_audio_devices.is_empty() {
-            self.error_message = Some("No audio devices available".to_string());
-            return Ok(());
-        }
-        
-        let current_device = self.settings_manager.selected_audio_device();
-        let current_index = if let Some(ref device) = current_device {
-            self.available_audio_devices.iter()
-                .position(|(name, _)| name == device)
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        
-        let next_index = (current_index + 1) % self.available_audio_devices.len();
-        let (next_device, display_name) = &self.available_audio_devices[next_index];
-        
-        let result = self.settings_manager.update(|s| {
-            s.audio.selected_device = if next_device == "default" {
-                None
-            } else {
-                Some(next_device.clone())
-            };
-        });
-        
-        match result {
-            Ok(_) => {
-                self.success_message = Some(format!("Audio device: {}", display_name));
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to save: {}", e));
-            }
-        }
-        
         Ok(())
     }
 
@@ -355,14 +362,15 @@ impl SettingsPage {
             .split(area);
 
         // Header
+        let theme_colors = self.theme_manager.get_colors();
         let header = Paragraph::new("⚙️  Application Settings")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme_colors.accent))
             );
         frame.render_widget(header, main_layout[0]);
 
@@ -377,10 +385,20 @@ impl SettingsPage {
 
         // Footer with controls
         self.render_footer(frame, main_layout[4]);
+
+        // Render popups if open
+        if self.theme_selector_open {
+            self.render_theme_selector(frame, area);
+        }
+        
+        if self.audio_selector_open {
+            self.render_audio_selector(frame, area);
+        }
     }
 
     fn render_settings_list(&mut self, frame: &mut Frame, area: Rect) {
         let settings = self.settings_manager.get();
+        let theme_colors = self.theme_manager.get_colors();
 
         let items: Vec<ListItem> = ALL_SETTINGS
             .iter()
@@ -414,8 +432,8 @@ impl SettingsPage {
                     SettingItem::RemoteControlPort => {
                         settings.remote_control.preferred_port.to_string()
                     }
-                    SettingItem::ThemeAccentColor => {
-                        settings.theme.accent_color.clone()
+                    SettingItem::Theme => {
+                        settings.theme.theme_name.clone()
                     }
                     SettingItem::UseBorders => {
                         if settings.theme.use_borders { "Enabled" } else { "Disabled" }.to_string()
@@ -424,18 +442,18 @@ impl SettingsPage {
 
                 let value_color = match setting {
                     SettingItem::AutoLoadEpisodes | SettingItem::RemoteControlEnabled | SettingItem::UseBorders => {
-                        if value == "Enabled" { Color::Green } else { Color::Red }
+                        if value == "Enabled" { theme_colors.success } else { theme_colors.error }
                     }
-                    _ => Color::Yellow,
+                    _ => theme_colors.primary,
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                     Span::styled(format!(" → {}", value), Style::default().fg(value_color).add_modifier(Modifier::BOLD)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(description, Style::default().fg(Color::Gray)),
+                    Span::styled(description, Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -448,11 +466,12 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Settings")
-                    .border_style(Style::default().fg(Color::Gray))
+                    .border_style(Style::default().fg(theme_colors.border))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -461,6 +480,7 @@ impl SettingsPage {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -470,25 +490,29 @@ impl SettingsPage {
             .split(area);
 
         // Controls
-        let controls = Paragraph::new("Enter/→: Toggle • ←/→: Adjust • +/-: Adjust • r: Reload • s: Save")
-            .style(Style::default().fg(Color::DarkGray))
+        let controls = if self.theme_selector_open || self.audio_selector_open {
+            Paragraph::new("↑/↓: Navigate • Enter: Select • Esc: Cancel")
+        } else {
+            Paragraph::new("Enter: Select • ←/→: Adjust • +/-: Adjust • r: Reload • s: Save")
+        }
+            .style(Style::default().fg(theme_colors.text_secondary))
             .alignment(Alignment::Left)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Controls")
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(theme_colors.border))
             );
         frame.render_widget(controls, layout[0]);
 
         // Status message
         let (message, color) = if let Some(ref error) = self.error_message {
-            (format!("❌ {}", error), Color::Red)
+            (format!("❌ {}", error), theme_colors.error)
         } else if let Some(ref success) = self.success_message {
-            (format!("✅ {}", success), Color::Green)
+            (format!("✅ {}", success), theme_colors.success)
         } else {
-            ("Ready".to_string(), Color::Gray)
+            ("Ready".to_string(), theme_colors.text_secondary)
         };
 
         let status = Paragraph::new(message)
@@ -499,13 +523,14 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Status")
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(theme_colors.border))
             );
         frame.render_widget(status, layout[1]);
     }
 
     fn render_connection_info(&self, frame: &mut Frame, area: Rect) {
         let settings = self.settings_manager.get();
+        let theme_colors = self.theme_manager.get_colors();
         let port = settings.remote_control.preferred_port;
         
         // Try to get local IP address
@@ -520,19 +545,125 @@ impl SettingsPage {
         );
         
         let connection_info = Paragraph::new(connection_text)
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(theme_colors.warning))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("🔗 PinePods Integration")
-                    .border_style(Style::default().fg(Color::Yellow))
+                    .border_style(Style::default().fg(theme_colors.primary))
             );
         frame.render_widget(connection_info, area);
     }
 
+    fn render_theme_selector(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
+        let available_themes = ThemeManager::available_themes();
+        
+        // Create a popup in the center
+        let popup_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(20),
+                Constraint::Length(available_themes.len() as u16 + 4), // +4 for borders and title
+                Constraint::Percentage(20),
+            ])
+            .split(area)[1];
+            
+        let popup_area = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(25),
+                Constraint::Percentage(50),
+                Constraint::Percentage(25),
+            ])
+            .split(popup_area)[1];
+        
+        // Clear the background
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        
+        let items: Vec<ListItem> = available_themes
+            .iter()
+            .map(|&theme_name| {
+                ListItem::new(theme_name)
+            })
+            .collect();
+        
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title("🎨 Select Theme (Enter to select, Esc to cancel)")
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(theme_colors.primary)
+                    .fg(theme_colors.background)
+                    .add_modifier(Modifier::BOLD)
+            )
+            .highlight_symbol("► ");
+
+        frame.render_stateful_widget(list, popup_area, &mut self.theme_selector_state);
+    }
+
+    fn render_audio_selector(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
+        
+        // Create a popup in the center
+        let popup_area = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(30),
+                Constraint::Length(self.available_audio_devices.len() as u16 + 4), // +4 for borders and title
+                Constraint::Percentage(30),
+            ])
+            .split(area)[1];
+            
+        let popup_area = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(15),
+                Constraint::Percentage(70),
+                Constraint::Percentage(15),
+            ])
+            .split(popup_area)[1];
+        
+        // Clear the background
+        frame.render_widget(ratatui::widgets::Clear, popup_area);
+        
+        let items: Vec<ListItem> = self.available_audio_devices
+            .iter()
+            .map(|(_, display_name)| {
+                ListItem::new(display_name.as_str())
+            })
+            .collect();
+        
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title("🔊 Select Audio Device (Enter to select, Esc to cancel)")
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(theme_colors.primary)
+                    .fg(theme_colors.background)
+                    .add_modifier(Modifier::BOLD)
+            )
+            .highlight_symbol("► ");
+
+        frame.render_stateful_widget(list, popup_area, &mut self.audio_selector_state);
+    }
+
     fn render_web_ui_message(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         // Get server name from client if available
         let server_name = "your PinePods server"; // Could be enhanced to get actual server name
         
@@ -542,20 +673,150 @@ impl SettingsPage {
         );
         
         let web_ui_message = Paragraph::new(message_text)
-            .style(Style::default().fg(Color::Cyan))
+            .style(Style::default().fg(theme_colors.accent))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("🌐 Web Interface")
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme_colors.accent))
             );
         frame.render_widget(web_ui_message, area);
+    }
+
+    fn open_theme_selector(&mut self) {
+        self.theme_selector_open = true;
+        // Set the current theme as selected in the dropdown
+        let available_themes = ThemeManager::available_themes();
+        let current_theme = self.settings_manager.theme_name();
+        if let Some(index) = available_themes.iter().position(|&theme| theme == current_theme) {
+            self.theme_selector_state.select(Some(index));
+        }
+    }
+    
+    fn open_audio_selector(&mut self) {
+        self.audio_selector_open = true;
+        // Set the current device as selected in the dropdown
+        let current_device = self.settings_manager.selected_audio_device();
+        if let Some(ref device) = current_device {
+            if let Some(index) = self.available_audio_devices.iter().position(|(name, _)| name == device) {
+                self.audio_selector_state.select(Some(index));
+            }
+        } else {
+            self.audio_selector_state.select(Some(0)); // Default device
+        }
+    }
+
+    async fn handle_theme_selector_input(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.theme_selector_open = false;
+            }
+            KeyCode::Enter => {
+                if let Some(selected) = self.theme_selector_state.selected() {
+                    let available_themes = ThemeManager::available_themes();
+                    if let Some(&theme_name) = available_themes.get(selected) {
+                        let result = self.settings_manager.update(|s| {
+                            s.theme.theme_name = theme_name.to_string();
+                        });
+                        
+                        match result {
+                            Ok(_) => {
+                                self.theme_manager.set_theme(theme_name);
+                                self.success_message = Some(format!("Theme: {}", theme_name));
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("Failed to save: {}", e));
+                            }
+                        }
+                    }
+                }
+                self.theme_selector_open = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(selected) = self.theme_selector_state.selected() {
+                    let available_themes = ThemeManager::available_themes();
+                    let new_index = if selected > 0 {
+                        selected - 1
+                    } else {
+                        available_themes.len() - 1
+                    };
+                    self.theme_selector_state.select(Some(new_index));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(selected) = self.theme_selector_state.selected() {
+                    let available_themes = ThemeManager::available_themes();
+                    let new_index = (selected + 1) % available_themes.len();
+                    self.theme_selector_state.select(Some(new_index));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    async fn handle_audio_selector_input(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.audio_selector_open = false;
+            }
+            KeyCode::Enter => {
+                if let Some(selected) = self.audio_selector_state.selected() {
+                    if let Some((device_name, display_name)) = self.available_audio_devices.get(selected) {
+                        let result = self.settings_manager.update(|s| {
+                            s.audio.selected_device = if device_name == "default" {
+                                None
+                            } else {
+                                Some(device_name.clone())
+                            };
+                        });
+                        
+                        match result {
+                            Ok(_) => {
+                                self.success_message = Some(format!("Audio device: {}", display_name));
+                            }
+                            Err(e) => {
+                                self.error_message = Some(format!("Failed to save: {}", e));
+                            }
+                        }
+                    }
+                }
+                self.audio_selector_open = false;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(selected) = self.audio_selector_state.selected() {
+                    let new_index = if selected > 0 {
+                        selected - 1
+                    } else {
+                        self.available_audio_devices.len() - 1
+                    };
+                    self.audio_selector_state.select(Some(new_index));
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(selected) = self.audio_selector_state.selected() {
+                    let new_index = (selected + 1) % self.available_audio_devices.len();
+                    self.audio_selector_state.select(Some(new_index));
+                }
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     // Getter for settings manager (to be used by other parts of the app)
     pub fn settings_manager(&self) -> &SettingsManager {
         &self.settings_manager
+    }
+
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+        // Also reload the settings manager to get the updated theme name
+        if let Ok(new_settings_manager) = SettingsManager::new() {
+            self.settings_manager = new_settings_manager;
+        }
     }
 }

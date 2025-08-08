@@ -12,6 +12,7 @@ use std::time::Instant;
 use crate::api::{PinepodsClient, Podcast, PodcastEpisode, Episode};
 use crate::audio::AudioPlayer;
 use crate::settings::SettingsManager;
+use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FocusPanel {
@@ -43,6 +44,9 @@ pub struct PodcastsPage {
     
     // Settings
     settings_manager: SettingsManager,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl PodcastsPage {
@@ -69,6 +73,7 @@ impl PodcastsPage {
             last_update: Instant::now(),
             audio_player: None,
             settings_manager,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -254,6 +259,11 @@ impl PodcastsPage {
         Ok(())
     }
 
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let main_layout = Layout::default()
             .direction(Direction::Horizontal)
@@ -271,20 +281,21 @@ impl PodcastsPage {
     }
 
     fn render_podcasts_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if self.podcasts.is_empty() && !self.loading {
             let empty_msg = "No podcasts found. Press 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title("🎙️ Podcasts")
                         .border_style(if self.focused_panel == FocusPanel::Podcasts {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(theme_colors.primary)
                         } else {
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(theme_colors.border)
                         })
                 );
             frame.render_widget(empty, area);
@@ -298,12 +309,12 @@ impl PodcastsPage {
                 let author = &podcast.author;
                 
                 let line1 = Line::from(vec![
-                    Span::styled(&podcast.podcastname, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(&podcast.podcastname, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(format!("by {}", author), Style::default().fg(Color::Cyan)),
-                    Span::styled(format!(" • {} episodes", episode_count), Style::default().fg(Color::Gray)),
+                    Span::styled(format!("by {}", author), Style::default().fg(theme_colors.accent)),
+                    Span::styled(format!(" • {} episodes", episode_count), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -317,14 +328,15 @@ impl PodcastsPage {
                     .border_type(BorderType::Rounded)
                     .title("🎙️ Podcasts")
                     .border_style(if self.focused_panel == FocusPanel::Podcasts {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(theme_colors.primary)
                     } else {
-                        Style::default().fg(Color::Gray)
+                        Style::default().fg(theme_colors.border)
                     })
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -338,6 +350,7 @@ impl PodcastsPage {
     }
 
     fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let title = if let Some(selected) = self.podcast_list_state.selected() {
             if let Some(podcast) = self.podcasts.get(selected) {
                 format!("📻 Episodes - {}", podcast.podcastname)
@@ -357,16 +370,16 @@ impl PodcastsPage {
 
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(title)
                         .border_style(if self.focused_panel == FocusPanel::Episodes {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(theme_colors.primary)
                         } else {
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(theme_colors.border)
                         })
                 );
             frame.render_widget(empty, area);
@@ -403,13 +416,13 @@ impl PodcastsPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(&episode.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(&episode.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(pub_date, Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                    Span::styled(pub_date, Style::default().fg(theme_colors.accent)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -423,14 +436,15 @@ impl PodcastsPage {
                     .border_type(BorderType::Rounded)
                     .title(title)
                     .border_style(if self.focused_panel == FocusPanel::Episodes {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(theme_colors.primary)
                     } else {
-                        Style::default().fg(Color::Gray)
+                        Style::default().fg(theme_colors.border)
                     })
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -452,13 +466,14 @@ impl PodcastsPage {
             };
             
             let error_msg = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center);
             frame.render_widget(error_msg, error_area);
         }
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect, message: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -480,14 +495,14 @@ impl PodcastsPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
     }

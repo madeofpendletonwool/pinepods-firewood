@@ -13,6 +13,7 @@ use crate::api::PinepodsClient;
 use crate::auth::SessionInfo;
 use crate::audio::AudioPlayer;
 use crate::settings::SettingsManager;
+use crate::theme::ThemeManager;
 use super::pages::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -131,6 +132,9 @@ pub struct TuiApp {
     // Tab scrolling state
     tab_scroll_offset: usize,
     
+    // Theme management
+    theme_manager: ThemeManager,
+    
     // Animation
     animation_frame: usize,
     last_animation_update: Instant,
@@ -147,6 +151,10 @@ impl TuiApp {
         });
         
         let selected_device = settings_manager.selected_audio_device();
+        
+        // Initialize theme manager with current theme from settings
+        let mut theme_manager = ThemeManager::new();
+        theme_manager.set_theme(settings_manager.theme_name());
         
         // Create audio player with selected device
         let audio_player = AudioPlayer::new_with_device(client.clone(), selected_device)?;
@@ -184,6 +192,8 @@ impl TuiApp {
             
             tab_scroll_offset: 0,
             
+            theme_manager,
+            
             animation_frame: 0,
             last_animation_update: Instant::now(),
         })
@@ -199,6 +209,10 @@ impl TuiApp {
 
     pub fn audio_player(&self) -> &AudioPlayer {
         &self.audio_player
+    }
+
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
     }
 
     pub async fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
@@ -266,7 +280,17 @@ impl TuiApp {
             AppTab::Saved => self.saved_page.handle_input(key).await?,
             AppTab::Downloads => self.downloads_page.handle_input(key).await?,
             AppTab::Search => self.search_page.handle_input(key).await?,
-            AppTab::Settings => self.settings_page.handle_input(key).await?,
+            AppTab::Settings => {
+                self.settings_page.handle_input(key).await?;
+                // Check if theme changed and sync it
+                let current_theme = self.settings_page.settings_manager().theme_name().to_string();
+                if current_theme != self.theme_manager.get_theme_name() {
+                    self.update_theme(&current_theme);
+                    // Also update all other pages
+                    self.home_page.update_theme(&current_theme);
+                    self.podcasts_page.update_theme(&current_theme);
+                }
+            },
         }
 
         Ok(())
@@ -360,6 +384,7 @@ impl TuiApp {
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let all_tabs = [
             AppTab::Home,
             AppTab::Podcasts,
@@ -420,10 +445,10 @@ impl TuiApp {
                 let shortcut = format!(" {}", actual_idx + 1);
                 
                 Line::from(vec![
-                    Span::raw(icon),
+                    Span::styled(icon, Style::default().fg(theme_colors.accent)),
                     Span::raw(" "),
-                    Span::raw(title),
-                    Span::styled(shortcut, Style::default().fg(Color::DarkGray)),
+                    Span::styled(title, Style::default().fg(theme_colors.text)),
+                    Span::styled(shortcut, Style::default().fg(theme_colors.text_secondary)),
                 ])
             })
             .collect();
@@ -456,14 +481,17 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .style(Style::default().fg(Color::Green))
+                    .style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.accent))
                     .title(tab_title)
+                    .title_style(Style::default().fg(theme_colors.text))
             )
             .select(selected_index)
-            .style(Style::default().fg(Color::Gray))
+            .style(Style::default().fg(theme_colors.text_secondary))
             .highlight_style(
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(theme_colors.primary)
+                    .bg(theme_colors.container)
                     .add_modifier(Modifier::BOLD)
             );
 
@@ -471,6 +499,7 @@ impl TuiApp {
     }
 
     fn render_micro_player(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let player_state = self.audio_player.get_state();
         
         if let Some(ref episode) = player_state.current_episode {
@@ -494,18 +523,19 @@ impl TuiApp {
 
             let episode_info = ratatui::widgets::Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled("🎵 ", Style::default().fg(Color::Green)),
-                    Span::styled(title_text, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled("🎵 ", Style::default().fg(theme_colors.accent)),
+                    Span::styled(title_text, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::from(vec![
-                    Span::styled("by ", Style::default().fg(Color::Gray)),
-                    Span::styled(podcast_name, Style::default().fg(Color::Cyan)),
+                    Span::styled("by ", Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(podcast_name, Style::default().fg(theme_colors.primary)),
                 ]),
             ])
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme_colors.border))
             );
             frame.render_widget(episode_info, layout[0]);
 
@@ -521,8 +551,9 @@ impl TuiApp {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme_colors.border))
                 )
-                .gauge_style(Style::default().fg(Color::Blue))
+                .gauge_style(Style::default().fg(theme_colors.primary).bg(theme_colors.container))
                 .ratio(progress);
             frame.render_widget(progress_bar, layout[1]);
 
@@ -539,15 +570,15 @@ impl TuiApp {
 
             let controls = ratatui::widgets::Paragraph::new(vec![
                 Line::from(vec![
-                    Span::styled(status_icon, Style::default().fg(Color::Yellow)),
+                    Span::styled(status_icon, Style::default().fg(theme_colors.warning)),
                     Span::raw(" "),
-                    Span::styled(format!("{}/{}", current_time, total_time), Style::default().fg(Color::White)),
+                    Span::styled(format!("{}/{}", current_time, total_time), Style::default().fg(theme_colors.text)),
                 ]),
                 Line::from(vec![
-                    Span::styled("Space", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::raw(" Play/Pause "),
-                    Span::styled("4", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::raw(" Player"),
+                    Span::styled("Space", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" Play/Pause ", Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled("4", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(" Player", Style::default().fg(theme_colors.text_secondary)),
                 ]),
             ])
             .alignment(Alignment::Center)
@@ -555,18 +586,21 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme_colors.border))
             );
             frame.render_widget(controls, layout[2]);
         } else {
             // No episode playing
             let no_player = ratatui::widgets::Paragraph::new("No episode playing")
-                .style(Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC))
+                .style(Style::default().fg(theme_colors.text_secondary).add_modifier(Modifier::ITALIC))
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme_colors.border))
                         .title("🎵 Player")
+                        .title_style(Style::default().fg(theme_colors.accent))
                 );
             frame.render_widget(no_player, area);
         }
@@ -580,6 +614,7 @@ impl TuiApp {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let shortcuts = vec![
             ("Tab", "Switch tabs"),
             ("1-9", "Quick tab"),
@@ -592,12 +627,12 @@ impl TuiApp {
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
                 ];
                 
                 if i < shortcuts.len() - 1 {
-                    spans.push(Span::raw("  "));
+                    spans.push(Span::styled("  ", Style::default().fg(theme_colors.text_secondary)));
                 }
                 
                 spans
@@ -610,17 +645,20 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Blue))
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(footer, area);
     }
 
     fn render_messages_overlay(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let message = if let Some(error) = &self.error_message {
-            Some((format!("❌ {}", error), Color::Red, "Error"))
+            Some((format!("❌ {}", error), theme_colors.error, "Error"))
         } else if let Some(success) = &self.success_message {
-            Some((format!("✅ {}", success), Color::Green, "Success"))
+            Some((format!("✅ {}", success), theme_colors.success, "Success"))
         } else {
             None
         };
@@ -657,7 +695,7 @@ impl TuiApp {
                         .border_type(ratatui::widgets::BorderType::Rounded)
                         .title(format!("{} (Press any key to dismiss)", title))
                         .border_style(Style::default().fg(color))
-                        .style(Style::default().bg(Color::Black))
+                        .style(Style::default().bg(theme_colors.container))
                 );
 
             frame.render_widget(message_widget, popup_area);
@@ -712,6 +750,32 @@ impl TuiApp {
     }
 
     pub async fn initialize(&mut self) -> Result<()> {
+        // Fetch theme from server and sync with local settings
+        let user_id = self.session_info.auth_state.user_details.UserID;
+        match crate::theme::ThemeManager::fetch_theme_from_server(&self.client, user_id).await {
+            Ok(server_theme) => {
+                log::info!("Fetched theme from server: {}", server_theme);
+                // Update local settings with server theme
+                if let Ok(mut settings_manager) = crate::settings::SettingsManager::new() {
+                    let _ = settings_manager.update(|s| {
+                        s.theme.theme_name = server_theme.clone();
+                    });
+                    // Update theme manager with server theme
+                    self.theme_manager.set_theme(&server_theme);
+                    // Update all page theme managers
+                    self.settings_page.update_theme(&server_theme);
+                    self.home_page.update_theme(&server_theme);
+                    self.podcasts_page.update_theme(&server_theme);
+                } else {
+                    log::warn!("Could not update local settings with server theme");
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to fetch theme from server, using local settings: {}", e);
+                // Continue with local theme - this is not a fatal error
+            }
+        }
+        
         // Initialize all pages
         self.home_page.initialize().await?;
         self.podcasts_page.initialize().await?;

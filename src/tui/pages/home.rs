@@ -13,6 +13,7 @@ use ratatui::{
 use std::time::Instant;
 
 use crate::api::{PinepodsClient, HomeOverview, Episode, Playlist};
+use crate::theme::ThemeManager;
 
 pub struct HomePage {
     client: PinepodsClient,
@@ -28,6 +29,9 @@ pub struct HomePage {
     
     // Sections
     sections: Vec<HomeSection>,
+    
+    // Theme management
+    theme_manager: ThemeManager,
     
     // Animation
     last_update: Instant,
@@ -58,6 +62,7 @@ impl HomePage {
             loading: false,
             error_message: None,
             sections: Vec::new(),
+            theme_manager: ThemeManager::new(),
             last_update: Instant::now(),
         }
     }
@@ -238,6 +243,11 @@ impl HomePage {
         Ok(())
     }
 
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         if self.loading {
             self.render_loading(frame, area);
@@ -281,14 +291,15 @@ impl HomePage {
     }
 
     fn render_section_list(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let items: Vec<ListItem> = self.sections
             .iter()
             .enumerate()
             .map(|(i, section)| {
                 let style = if i == self.selected_section {
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme_colors.text)
                 };
 
                 let text = format!("{} {} ({})", 
@@ -307,11 +318,12 @@ impl HomePage {
                     .border_type(BorderType::Rounded)
                     .title("Sections")
                     .title_alignment(Alignment::Center)
-                    .border_style(Style::default().fg(Color::Blue))
+                    .border_style(Style::default().fg(theme_colors.accent))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::Blue)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             );
 
@@ -319,15 +331,16 @@ impl HomePage {
     }
 
     fn render_section_content(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if let Some(section) = self.sections.get(self.selected_section) {
             let items: Vec<ListItem> = section.items
                 .iter()
                 .enumerate()
                 .map(|(i, item)| {
                     let style = if i == self.selected_item {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(theme_colors.text)
                     };
 
                     let text = match item {
@@ -361,12 +374,12 @@ impl HomePage {
                         .border_type(BorderType::Rounded)
                         .title(format!("{} {}", section.icon, section.title))
                         .title_alignment(Alignment::Center)
-                        .border_style(Style::default().fg(Color::Green))
+                        .border_style(Style::default().fg(theme_colors.border))
                 )
                 .highlight_style(
                     Style::default()
-                        .bg(Color::Green)
-                        .fg(Color::Black)
+                        .bg(theme_colors.highlight)
+                        .fg(theme_colors.background)
                         .add_modifier(Modifier::BOLD)
                 )
                 .highlight_symbol("► ");
@@ -376,6 +389,7 @@ impl HomePage {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let controls = vec![
             ("←→/hl", "Navigate sections"),
             ("↑↓/jk", "Navigate items"),
@@ -389,8 +403,8 @@ impl HomePage {
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
                 ];
                 
                 if i < controls.len() - 1 {
@@ -407,22 +421,25 @@ impl HomePage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Blue))
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(footer, area);
     }
 
     fn render_loading(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let loading_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title("Loading Home...")
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(theme_colors.accent));
 
         let loading_text = Paragraph::new("🔄 Loading your personalized home page...")
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(theme_colors.accent))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true })
             .block(loading_block);
@@ -431,15 +448,16 @@ impl HomePage {
     }
 
     fn render_error(&self, frame: &mut Frame, area: Rect, error: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let error_block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title("Error")
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(Color::Red));
+            .border_style(Style::default().fg(theme_colors.error));
 
         let error_text = Paragraph::new(format!("❌ {}\n\nPress 'r' to retry", error))
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(theme_colors.error))
             .alignment(Alignment::Center)
             .wrap(Wrap { trim: true })
             .block(error_block);
@@ -448,23 +466,24 @@ impl HomePage {
     }
 
     fn render_empty(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let welcome_text = vec![
             Line::from(vec![
                 Span::styled("🌲 Welcome to Pinepods Firewood! 🌲", 
-                           Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                           Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
             ]),
             Line::from(""),
-            Line::from("It looks like you don't have any recent activity yet."),
-            Line::from("Here are some things you can do to get started:"),
+            Line::from(vec![Span::styled("It looks like you don't have any recent activity yet.", Style::default().fg(theme_colors.text))]),
+            Line::from(vec![Span::styled("Here are some things you can do to get started:", Style::default().fg(theme_colors.text))]),
             Line::from(""),
-            Line::from("• Subscribe to podcasts in the Podcasts tab"),
-            Line::from("• Search for episodes in the Search tab"),
-            Line::from("• Import your subscriptions in Settings"),
+            Line::from(vec![Span::styled("• Subscribe to podcasts in the Podcasts tab", Style::default().fg(theme_colors.text_secondary))]),
+            Line::from(vec![Span::styled("• Search for episodes in the Search tab", Style::default().fg(theme_colors.text_secondary))]),
+            Line::from(vec![Span::styled("• Import your subscriptions in Settings", Style::default().fg(theme_colors.text_secondary))]),
             Line::from(""),
             Line::from(vec![
-                Span::styled("Press ", Style::default().fg(Color::Gray)),
-                Span::styled("Tab", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(" to navigate between tabs", Style::default().fg(Color::Gray)),
+                Span::styled("Press ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("Tab", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" to navigate between tabs", Style::default().fg(theme_colors.text_secondary)),
             ]),
         ];
 
@@ -473,7 +492,7 @@ impl HomePage {
             .border_type(BorderType::Rounded)
             .title("Welcome")
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(Color::Blue));
+            .border_style(Style::default().fg(theme_colors.accent));
 
         let welcome_paragraph = Paragraph::new(welcome_text)
             .alignment(Alignment::Center)

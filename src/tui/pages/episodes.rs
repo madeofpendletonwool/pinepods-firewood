@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::api::{PinepodsClient, Episode};
 use crate::audio::AudioPlayer;
+use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum EpisodesFilter {
@@ -78,6 +79,9 @@ pub struct EpisodesPage {
     
     // Audio player
     audio_player: Option<AudioPlayer>,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl EpisodesPage {
@@ -97,6 +101,7 @@ impl EpisodesPage {
             error_message: None,
             last_update: Instant::now(),
             audio_player: None,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -359,6 +364,11 @@ impl EpisodesPage {
         Ok(())
     }
 
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
+
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -385,6 +395,7 @@ impl EpisodesPage {
     }
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let header_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -398,12 +409,14 @@ impl EpisodesPage {
         );
         
         let filter = Paragraph::new(filter_text)
-            .style(Style::default().fg(Color::Cyan))
+            .style(Style::default().fg(theme_colors.accent))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("📱 Feed")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
         frame.render_widget(filter, header_chunks[0]);
 
@@ -417,9 +430,9 @@ impl EpisodesPage {
         };
         
         let search_style = if self.search_mode {
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme_colors.warning).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(theme_colors.text_secondary)
         };
 
         let search = Paragraph::new(search_text)
@@ -429,11 +442,14 @@ impl EpisodesPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("🔍 Search")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
         frame.render_widget(search, header_chunks[1]);
     }
 
     fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if self.filtered_episodes.is_empty() {
             let empty_msg = if self.episodes.is_empty() {
                 "No episodes found. Press 'r' to refresh."
@@ -445,11 +461,12 @@ impl EpisodesPage {
 
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
+                        .border_style(Style::default().fg(theme_colors.border))
                 );
             frame.render_widget(empty, area);
             return;
@@ -496,15 +513,15 @@ impl EpisodesPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(podcast_name, Style::default().fg(Color::Cyan)),
+                    Span::styled(podcast_name, Style::default().fg(theme_colors.accent)),
                     Span::raw(" • "),
-                    Span::styled(title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(duration, Style::default().fg(Color::Gray)),
-                    Span::styled(progress_bar, Style::default().fg(Color::Blue)),
+                    Span::styled(duration, Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(progress_bar, Style::default().fg(theme_colors.primary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -517,10 +534,13 @@ impl EpisodesPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Feed")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -529,6 +549,7 @@ impl EpisodesPage {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let controls = if self.search_mode {
             vec![
                 ("Esc", "Cancel search"),
@@ -552,8 +573,8 @@ impl EpisodesPage {
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
                 ];
                 
                 if i < controls.len() - 1 {
@@ -570,7 +591,9 @@ impl EpisodesPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Blue))
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(footer, area);
@@ -585,13 +608,14 @@ impl EpisodesPage {
             };
             
             let error_msg = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center);
             frame.render_widget(error_msg, error_area);
         }
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -613,14 +637,14 @@ impl EpisodesPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new("🔄 Loading episodes...")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
     }
