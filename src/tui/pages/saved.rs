@@ -138,7 +138,8 @@ impl SavedPage {
                 if let Some(episode_id) = episode.episode_id {
                     log::info!("Removing episode from saved: {}", episode.episode_title);
                     
-                    match self.client.unsave_episode(episode_id).await {
+                    let is_youtube = episode.is_youtube.unwrap_or(false);
+                    match self.client.unsave_episode(episode_id, is_youtube).await {
                         Ok(_) => {
                             // Remove from local list
                             self.saved_episodes.remove(selected);
@@ -170,6 +171,27 @@ impl SavedPage {
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(5),     // Episodes list
+                Constraint::Length(3),  // Footer with controls
+            ])
+            .split(area);
+
+        // Render episodes list
+        self.render_episodes_list(frame, chunks[0]);
+        
+        // Render footer
+        self.render_footer(frame, chunks[1]);
+        
+        // Loading overlay
+        if self.loading {
+            self.render_loading_overlay(frame, area, "Loading saved episodes...");
+        }
+    }
+
+    fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
         if self.saved_episodes.is_empty() && !self.loading {
             let empty_msg = "No saved episodes found.\nPress 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
@@ -241,17 +263,49 @@ impl SavedPage {
             .highlight_symbol("► ");
 
         frame.render_stateful_widget(list, area, &mut self.list_state);
+    }
 
-        // Show loading overlay
-        if self.loading {
-            self.render_loading_overlay(frame, area, "Loading saved episodes...");
-        }
+    fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let controls = vec![
+            ("↑↓/jk", "Navigate"),
+            ("Enter", "Play"),
+            ("u", "Unsave"),
+            ("r", "Refresh"),
+        ];
+
+        let footer_text: Vec<Span> = controls
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (key, desc))| {
+                let mut spans = vec![
+                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                ];
+                
+                if i < controls.len() - 1 {
+                    spans.push(Span::raw("  "));
+                }
+                
+                spans
+            })
+            .collect();
+
+        let footer = Paragraph::new(Line::from(footer_text))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Color::Blue))
+            );
+
+        frame.render_widget(footer, area);
 
         // Show error message if present
         if let Some(error) = &self.error_message {
             let error_area = Rect {
                 x: area.x + 2,
-                y: area.y + area.height - 3,
+                y: area.y + 1,
                 width: area.width.saturating_sub(4),
                 height: 1,
             };
@@ -267,20 +321,6 @@ impl SavedPage {
                 .alignment(Alignment::Center);
             frame.render_widget(error_msg, error_area);
         }
-
-        // Show help text
-        let help_area = Rect {
-            x: area.x + 2,
-            y: area.y + 1,
-            width: area.width.saturating_sub(4),
-            height: 1,
-        };
-        
-        let help_text = "Enter: Play • u: Unsave • r: Refresh";
-        let help = Paragraph::new(help_text)
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Right);
-        frame.render_widget(help, help_area);
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect, message: &str) {

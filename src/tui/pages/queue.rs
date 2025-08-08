@@ -5,7 +5,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, List, ListItem, Paragraph, Wrap
+        Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap
     },
     Frame,
 };
@@ -19,6 +19,7 @@ pub struct QueuePage {
     queue_items: Vec<QueueItem>,
     
     // UI State
+    list_state: ListState,
     selected_item: usize,
     loading: bool,
     error_message: Option<String>,
@@ -30,9 +31,13 @@ pub struct QueuePage {
 
 impl QueuePage {
     pub fn new(client: PinepodsClient) -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        
         Self {
             client,
             queue_items: Vec::new(),
+            list_state,
             selected_item: 0,
             loading: false,
             error_message: None,
@@ -57,6 +62,11 @@ impl QueuePage {
                 // Reset selection if needed
                 if self.selected_item >= self.queue_items.len() {
                     self.selected_item = 0;
+                    self.list_state.select(Some(0));
+                } else if self.queue_items.is_empty() {
+                    self.list_state.select(None);
+                } else {
+                    self.list_state.select(Some(self.selected_item));
                 }
                 
                 self.loading = false;
@@ -78,16 +88,18 @@ impl QueuePage {
 
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                if !self.queue_items.is_empty() {
-                    self.selected_item = (self.selected_item + 1) % self.queue_items.len();
+                if let Some(selected) = self.list_state.selected() {
+                    if selected < self.queue_items.len().saturating_sub(1) {
+                        self.list_state.select(Some(selected + 1));
+                        self.selected_item = selected + 1;
+                    }
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if !self.queue_items.is_empty() {
-                    if self.selected_item == 0 {
-                        self.selected_item = self.queue_items.len() - 1;
-                    } else {
-                        self.selected_item -= 1;
+                if let Some(selected) = self.list_state.selected() {
+                    if selected > 0 {
+                        self.list_state.select(Some(selected - 1));
+                        self.selected_item = selected - 1;
                     }
                 }
             }
@@ -185,7 +197,12 @@ impl QueuePage {
     }
 
     async fn remove_from_queue(&mut self, episode_id: i64) -> Result<()> {
-        match self.client.remove_from_queue(episode_id).await {
+        let is_youtube = self.queue_items.iter()
+            .find(|item| item.episode_id == episode_id)
+            .map(|item| item.is_youtube)
+            .unwrap_or(false);
+            
+        match self.client.remove_from_queue(episode_id, is_youtube).await {
             Ok(_) => {
                 self.refresh().await?;
             }
@@ -245,7 +262,12 @@ impl QueuePage {
     }
 
     async fn save_episode(&mut self, episode_id: i64) -> Result<()> {
-        match self.client.save_episode(episode_id).await {
+        let is_youtube = self.queue_items.iter()
+            .find(|item| item.episode_id == episode_id)
+            .map(|item| item.is_youtube)
+            .unwrap_or(false);
+            
+        match self.client.save_episode(episode_id, is_youtube).await {
             Ok(_) => {
                 // Show success message
             }
@@ -299,7 +321,7 @@ impl QueuePage {
         }
     }
 
-    fn render_queue_list(&self, frame: &mut Frame, area: Rect) {
+    fn render_queue_list(&mut self, frame: &mut Frame, area: Rect) {
         if self.queue_items.is_empty() {
             self.render_empty_queue(frame, area);
             return;
@@ -307,31 +329,40 @@ impl QueuePage {
 
         let items: Vec<ListItem> = self.queue_items
             .iter()
-            .enumerate()
-            .map(|(i, item)| {
-                let style = if i == self.selected_item {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-
+            .map(|item| {
                 let duration = format_duration(item.episode_duration);
-                let progress = item.listen_duration.unwrap_or(0);
-                let progress_indicator = if progress > 0 {
-                    let percent = (progress * 100) / item.episode_duration.max(1);
-                    format!(" ({}%)", percent)
-                } else {
-                    String::new()
-                };
+                let pub_date = format_pub_date(&item.episode_pub_date);
+                
+                // Status indicators
+                let mut indicators = Vec::new();
+                indicators.push(format!("#{}", item.queue_position)); // Queue position
+                if item.completed {
+                    indicators.push("✅".to_string());
+                } else if item.listen_duration.unwrap_or(0) > 0 {
+                    indicators.push("▶️".to_string());
+                }
+                if item.saved {
+                    indicators.push("⭐".to_string());
+                }
+                indicators.push("📝".to_string()); // Always show queued indicator
+                if item.downloaded {
+                    indicators.push("📥".to_string());
+                }
 
-                let text = format!("{}. {} - {}{} [{}]",
-                                 item.queue_position,
-                                 item.podcast_name,
-                                 item.episode_title,
-                                 progress_indicator,
-                                 duration);
+                let status = format!(" {}", indicators.join(" "));
 
-                ListItem::new(Text::from(text)).style(style)
+                let line1 = Line::from(vec![
+                    Span::styled(&item.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(Color::Green)),
+                ]);
+
+                let line2 = Line::from(vec![
+                    Span::styled(&item.podcast_name, Style::default().fg(Color::Cyan)),
+                    Span::styled(format!(" • {}", pub_date), Style::default().fg(Color::Yellow)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                ]);
+
+                ListItem::new(Text::from(vec![line1, line2]))
             })
             .collect();
 
@@ -357,7 +388,7 @@ impl QueuePage {
             )
             .highlight_symbol("► ");
 
-        frame.render_widget(list, area);
+        frame.render_stateful_widget(list, area, &mut self.list_state);
     }
 
     fn render_empty_queue(&self, frame: &mut Frame, area: Rect) {
@@ -529,5 +560,14 @@ fn format_duration(seconds: i64) -> String {
         format!("{}:{:02}:{:02}", hours, minutes, secs)
     } else {
         format!("{}:{:02}", minutes, secs)
+    }
+}
+
+fn format_pub_date(date_str: &str) -> String {
+    // Simple date formatting - you could use chrono for more sophisticated parsing
+    if let Some(date_part) = date_str.split('T').next() {
+        date_part.to_string()
+    } else {
+        date_str.to_string()
     }
 }

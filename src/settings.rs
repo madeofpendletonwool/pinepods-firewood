@@ -15,6 +15,8 @@ pub struct AppSettings {
     pub theme: ThemeSettings,
     /// Remote control settings
     pub remote_control: RemoteControlSettings,
+    /// Audio settings
+    pub audio: AudioSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +31,11 @@ pub struct RemoteControlSettings {
     pub preferred_port: u16,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioSettings {
+    pub selected_device: Option<String>,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -37,6 +44,7 @@ impl Default for AppSettings {
             skip_interval: 15,
             theme: ThemeSettings::default(),
             remote_control: RemoteControlSettings::default(),
+            audio: AudioSettings::default(),
         }
     }
 }
@@ -55,6 +63,14 @@ impl Default for RemoteControlSettings {
         Self {
             enabled: true,
             preferred_port: 8042,
+        }
+    }
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            selected_device: None, // None means use system default
         }
     }
 }
@@ -142,4 +158,37 @@ impl SettingsManager {
     pub fn remote_control_port(&self) -> u16 {
         self.settings.remote_control.preferred_port
     }
+
+    pub fn selected_audio_device(&self) -> Option<String> {
+        self.settings.audio.selected_device.clone()
+    }
+}
+
+// Audio device enumeration utilities
+pub fn get_available_audio_devices() -> Vec<(String, String)> {
+    use rodio::{cpal::traits::{DeviceTrait, HostTrait}};
+    
+    let mut devices = Vec::new();
+    
+    // Add default device option
+    devices.push(("default".to_string(), "System Default".to_string()));
+    
+    // Try to enumerate devices
+    let host = rodio::cpal::default_host();
+    
+    // Get output devices
+    if let Ok(device_iter) = host.output_devices() {
+        for device in device_iter {
+            if let Ok(name) = device.name() {
+                let display_name = if name.len() > 40 {
+                    format!("{}...", &name[..37])
+                } else {
+                    name.clone()
+                };
+                devices.push((name, display_name));
+            }
+        }
+    }
+    
+    devices
 }

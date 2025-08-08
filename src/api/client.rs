@@ -64,7 +64,9 @@ impl PinepodsClient {
             .await?;
 
         if response.status().is_success() {
-            let data: T = response.json().await?;
+            let response_text = response.text().await?;
+            log::debug!("API response for {}: {}", endpoint, response_text);
+            let data: T = serde_json::from_str(&response_text)?;
             Ok(data)
         } else {
             let status = response.status();
@@ -134,19 +136,21 @@ impl PinepodsClient {
         Ok(response.data)
     }
 
-    pub async fn add_to_queue(&self, episode_id: i64) -> Result<SimpleResponse> {
+    pub async fn add_to_queue(&self, episode_id: i64, is_youtube: bool) -> Result<SimpleResponse> {
         let request = AddToQueueRequest {
             episode_id,
             user_id: self.user_id() as i64,
+            is_youtube,
         };
         
         self.authenticated_post("/api/data/queue_pod", &request).await
     }
 
-    pub async fn remove_from_queue(&self, episode_id: i64) -> Result<SimpleResponse> {
+    pub async fn remove_from_queue(&self, episode_id: i64, is_youtube: bool) -> Result<SimpleResponse> {
         let request = RemoveFromQueueRequest {
             episode_id,
             user_id: self.user_id() as i64,
+            is_youtube,
         };
         
         self.authenticated_post("/api/data/remove_queued_pod", &request).await
@@ -165,19 +169,21 @@ impl PinepodsClient {
         Ok(response.saved_episodes)
     }
 
-    pub async fn save_episode(&self, episode_id: i64) -> Result<SimpleResponse> {
+    pub async fn save_episode(&self, episode_id: i64, is_youtube: bool) -> Result<SimpleResponse> {
         let request = SaveEpisodeRequest {
             episode_id,
             user_id: self.user_id() as i64,
+            is_youtube,
         };
         
         self.authenticated_post("/api/data/save_episode", &request).await
     }
 
-    pub async fn unsave_episode(&self, episode_id: i64) -> Result<SimpleResponse> {
+    pub async fn unsave_episode(&self, episode_id: i64, is_youtube: bool) -> Result<SimpleResponse> {
         let request = SaveEpisodeRequest {
             episode_id,
             user_id: self.user_id() as i64,
+            is_youtube,
         };
         
         self.authenticated_post("/api/data/remove_saved_episode", &request).await

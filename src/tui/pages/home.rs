@@ -131,19 +131,6 @@ impl HomePage {
             icon: "📊".to_string(),
         });
 
-        // Quick Actions
-        let actions = vec![
-            HomeItem::Action("Browse Podcasts".to_string(), "Discover and subscribe to new podcasts".to_string()),
-            HomeItem::Action("Search Episodes".to_string(), "Find specific episodes across all your podcasts".to_string()),
-            HomeItem::Action("Manage Downloads".to_string(), "View and manage your downloaded episodes".to_string()),
-            HomeItem::Action("View Statistics".to_string(), "See your listening habits and statistics".to_string()),
-        ];
-
-        self.sections.push(HomeSection {
-            title: "Quick Actions".to_string(),
-            items: actions,
-            icon: "⚡".to_string(),
-        });
 
         // Reset selection if needed
         if self.selected_section >= self.sections.len() {
@@ -268,18 +255,29 @@ impl HomePage {
         }
 
         let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(5),     // Main content
+                Constraint::Length(3),  // Footer
+            ])
+            .split(area);
+
+        let content_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(30), // Section list
                 Constraint::Percentage(70), // Content
             ])
-            .split(area);
+            .split(main_layout[0]);
 
         // Render section list
-        self.render_section_list(frame, main_layout[0]);
+        self.render_section_list(frame, content_layout[0]);
 
         // Render selected section content
-        self.render_section_content(frame, main_layout[1]);
+        self.render_section_content(frame, content_layout[1]);
+
+        // Render footer
+        self.render_footer(frame, main_layout[1]);
     }
 
     fn render_section_list(&self, frame: &mut Frame, area: Rect) {
@@ -375,6 +373,44 @@ impl HomePage {
 
             frame.render_widget(list, area);
         }
+    }
+
+    fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let controls = vec![
+            ("←→/hl", "Navigate sections"),
+            ("↑↓/jk", "Navigate items"),
+            ("Tab", "Switch panels"),
+            ("Enter", "Activate"),
+            ("r", "Refresh"),
+        ];
+
+        let footer_text: Vec<Span> = controls
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (key, desc))| {
+                let mut spans = vec![
+                    Span::styled(*key, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(Color::Gray)),
+                ];
+                
+                if i < controls.len() - 1 {
+                    spans.push(Span::raw("  "));
+                }
+                
+                spans
+            })
+            .collect();
+
+        let footer = Paragraph::new(Line::from(footer_text))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(Color::Blue))
+            );
+
+        frame.render_widget(footer, area);
     }
 
     fn render_loading(&self, frame: &mut Frame, area: Rect) {

@@ -207,24 +207,16 @@ async fn play_episode(
     Json(request): Json<PlayEpisodeRequest>,
 ) -> Json<RemoteResponse<()>> {
     if let Some(ref player) = state.audio_player {
-        // Parse duration if not provided
-        let episode_duration = match request.episode_duration {
-            Some(duration) => {
-                log::info!("Using provided duration: {} seconds", duration);
+        // Always parse duration from actual audio file to handle dynamic ad injection
+        log::info!("Parsing actual duration from audio file: {}", request.episode_url);
+        let episode_duration = match parse_accurate_audio_duration(&request.episode_url).await {
+            Ok(duration) => {
+                log::info!("Successfully parsed accurate duration: {} seconds ({} minutes)", duration, duration / 60);
                 duration
             }
-            None => {
-                log::info!("Duration not provided, parsing from audio file...");
-                match parse_audio_duration(&request.episode_url).await {
-                    Ok(duration) => {
-                        log::info!("Parsed duration from audio: {} seconds", duration);
-                        duration
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse duration: {}, using fallback", e);
-                        1800 // 30 minutes fallback
-                    }
-                }
+            Err(e) => {
+                log::warn!("Failed to parse accurate duration: {}, using provided duration or fallback", e);
+                request.episode_duration.unwrap_or(3600) // 1 hour fallback
             }
         };
         
@@ -239,7 +231,7 @@ async fn play_episode(
             episode_artwork: request.episode_artwork.unwrap_or_default(),
             episode_url: request.episode_url,
             episode_duration,
-            listen_duration: request.start_position,
+            listen_duration: Some(request.start_position.unwrap_or(0).max(1)), // Ensure we never start at 0, use 1 second minimum
             completed: None,
             saved: None,
             queued: None,
@@ -249,12 +241,6 @@ async fn play_episode(
 
         match player.play_episode(episode) {
             Ok(_) => {
-                // If start_position is specified, seek to that position
-                if let Some(start_pos) = request.start_position {
-                    if start_pos > 0 {
-                        let _ = player.skip_forward(std::time::Duration::from_secs(start_pos as u64));
-                    }
-                }
                 Json(RemoteResponse::<()>::simple_success())
             },
             Err(e) => Json(RemoteResponse::error(format!("Failed to play episode: {}", e))),
@@ -264,72 +250,121 @@ async fn play_episode(
     }
 }
 
-async fn parse_audio_duration(url: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
+async fn parse_accurate_audio_duration(url: &str) -> Result<i64, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::Cursor;
+    use symphonia::core::probe::Hint;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::meta::MetadataOptions;
     
-    log::info!("Parsing audio duration from: {}", url);
+    log::info!("Parsing 100% accurate audio duration from: {}", url);
     
-    // Download first 256KB to get better metadata parsing
+    // Strategy 1: Check HTTP headers first (fastest)
     let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("Range", "bytes=0-262143") // 256KB
-        .send()
-        .await?;
+    let head_response = client.head(url).send().await?;
+    
+    if let Some(duration_header) = head_response.headers().get("x-content-duration") {
+        if let Ok(duration_str) = duration_header.to_str() {
+            if let Ok(duration_secs) = duration_str.parse::<f64>() {
+                log::info!("Found duration in HTTP header: {} seconds ({} minutes)", duration_secs, duration_secs / 60.0);
+                return Ok(duration_secs as i64);
+            }
+        }
+    }
+    
+    // Strategy 2: Download entire file and use symphonia for 100% accuracy
+    log::info!("Downloading entire file for accurate duration analysis...");
+    let response = client.get(url).send().await?;
     
     if !response.status().is_success() {
-        log::warn!("Failed to fetch audio metadata, status: {}", response.status());
-        return Err("Failed to fetch audio data".into());
+        log::warn!("Failed to fetch audio file, status: {}", response.status());
+        return Err("Failed to fetch audio file".into());
     }
     
     let bytes = response.bytes().await?;
-    log::info!("Downloaded {} bytes for metadata parsing", bytes.len());
+    let file_size_mb = bytes.len() as f64 / 1024.0 / 1024.0;
+    let file_size = bytes.len() as u64; // Store file size before moving bytes
+    log::info!("Downloaded entire file: {:.2} MB ({} bytes)", file_size_mb, bytes.len());
     
+    // Use symphonia (same library as the audio player) for guaranteed accuracy
     let cursor = Cursor::new(bytes);
+    let media_source = MediaSourceStream::new(Box::new(cursor), Default::default());
     
-    // Try to parse with lofty
-    match lofty::probe::Probe::new(cursor).guess_file_type() {
-        Ok(probe) => {
-            match probe.read() {
-                Ok(tagged_file) => {
-                    let properties = tagged_file.properties();
-                    let duration = properties.duration();
-                    let duration_secs = duration.as_secs();
-                    
-                    log::info!("Lofty parsed duration: {} seconds ({} minutes)", duration_secs, duration_secs / 60);
-                    
-                    if duration_secs > 0 {
-                        return Ok(duration_secs as i64);
-                    } else {
-                        log::warn!("Lofty returned zero duration");
-                    }
+    let mut hint = Hint::new();
+    if url.ends_with(".mp3") {
+        hint.with_extension("mp3");
+    } else if url.ends_with(".m4a") || url.ends_with(".aac") {
+        hint.with_extension("m4a");
+    } else if url.ends_with(".ogg") {
+        hint.with_extension("ogg");
+    } else if url.ends_with(".wav") {
+        hint.with_extension("wav");
+    }
+    
+    let format_opts = FormatOptions {
+        enable_gapless: true,
+        ..Default::default()
+    };
+    let metadata_opts = MetadataOptions::default();
+    
+    match symphonia::default::get_probe().format(&hint, media_source, &format_opts, &metadata_opts) {
+        Ok(probed) => {
+            let mut format = probed.format;
+            
+            // Get the default track (usually the audio track)
+            let track = format
+                .tracks()
+                .iter()
+                .find(|t| t.codec_params.codec != symphonia::core::codecs::CODEC_TYPE_NULL)
+                .ok_or("No valid audio track found")?;
+            
+            let track_id = track.id;
+            let codec_params = track.codec_params.clone(); // Clone to avoid borrow issues
+            
+            // Calculate duration from time base and duration if available
+            if let (Some(time_base), Some(n_frames)) = (codec_params.time_base, codec_params.n_frames) {
+                let duration_secs = (n_frames as f64 * time_base.numer as f64) / time_base.denom as f64;
+                log::info!("Symphonia calculated exact duration: {:.2} seconds ({:.2} minutes)", duration_secs, duration_secs / 60.0);
+                return Ok(duration_secs as i64);
+            }
+            
+            // Fallback: Count packets to calculate duration
+            log::info!("Time base not available, counting packets for exact duration...");
+            let mut packet_count = 0u64;
+            let mut last_timestamp = 0u64;
+            
+            // Use format reader to count packets
+            while let Ok(packet) = format.next_packet() {
+                if packet.track_id() == track_id {
+                    packet_count += 1;
+                    last_timestamp = packet.ts();
                 }
-                Err(e) => {
-                    log::warn!("Lofty failed to read tagged file: {}", e);
+                // Prevent infinite loops on corrupted files
+                if packet_count > 1_000_000 {
+                    log::warn!("Too many packets, stopping count to prevent timeout");
+                    break;
                 }
             }
+            
+            if last_timestamp > 0 && codec_params.time_base.is_some() {
+                let time_base = codec_params.time_base.unwrap();
+                let duration_secs = (last_timestamp as f64 * time_base.numer as f64) / time_base.denom as f64;
+                log::info!("Symphonia counted {} packets, calculated duration: {:.2} seconds ({:.2} minutes)", packet_count, duration_secs, duration_secs / 60.0);
+                return Ok(duration_secs as i64);
+            }
+            
+            log::warn!("Could not determine duration from packet counting");
         }
         Err(e) => {
-            log::warn!("Lofty failed to guess file type: {}", e);
+            log::warn!("Symphonia failed to probe audio file: {}", e);
         }
     }
     
-    // Fallback to file size estimation
-    log::info!("Attempting file size based duration estimation");
-    let head_response = client.head(url).send().await?;
-    if let Some(content_length) = head_response.headers().get("content-length") {
-        if let Ok(size_str) = content_length.to_str() {
-            if let Ok(size_bytes) = size_str.parse::<u64>() {
-                // Estimate based on typical MP3 bitrate (128kbps = 16KB/s)
-                let estimated_duration = size_bytes / 16000; // Rough estimate
-                log::info!("File size: {} bytes, estimated duration: {} seconds ({} minutes)", 
-                          size_bytes, estimated_duration, estimated_duration / 60);
-                return Ok(estimated_duration as i64);
-            }
-        }
-    }
+    // Strategy 3: Conservative bitrate estimation (only as absolute last resort)
+    let estimated_duration = file_size / 12000; // Very conservative 96kbps estimate
+    log::warn!("Using fallback bitrate estimation: {} bytes → {} seconds ({} minutes)", file_size, estimated_duration, estimated_duration / 60);
     
-    Err("Could not determine audio duration from metadata or file size".into())
+    Ok(estimated_duration as i64)
 }
 
 async fn pause_playback(

@@ -95,7 +95,7 @@ impl PodcastsPage {
                 self.loading = false;
                 
                 // Auto-select first podcast and load its episodes
-                if !self.podcasts.is_empty() && self.podcast_list_state.selected().is_none() {
+                if !self.podcasts.is_empty() {
                     self.podcast_list_state.select(Some(0));
                     if let Some(podcast) = self.podcasts.get(0) {
                         self.load_podcast_episodes(podcast.podcastid).await?;

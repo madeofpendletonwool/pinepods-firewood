@@ -109,7 +109,7 @@ impl DownloadsPage {
                 self.group_downloads_by_podcast();
                 
                 // Auto-select first podcast and load its downloads
-                if !self.podcasts_with_downloads.is_empty() && self.podcast_list_state.selected().is_none() {
+                if !self.podcasts_with_downloads.is_empty() {
                     self.podcast_list_state.select(Some(0));
                     if let Some(podcast) = self.podcasts_with_downloads.get(0) {
                         self.load_podcast_downloads(podcast.podcast_id).await?;

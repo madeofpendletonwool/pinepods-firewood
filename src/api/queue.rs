@@ -15,6 +15,11 @@ pub struct BulkQueueOperation {
     pub user_id: i64,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ReorderQueueFullRequest {
+    pub episode_ids: Vec<i64>,
+}
+
 impl PinepodsClient {
     /// Get the user's queue with detailed information
     pub async fn get_detailed_queue(&self) -> Result<Vec<QueueItem>> {
@@ -52,6 +57,40 @@ impl PinepodsClient {
         self.authenticated_post("/api/data/reorder_queue", &request).await
     }
 
+    /// Reorder the entire queue with new episode order
+    pub async fn reorder_queue_full(&self, episode_ids: Vec<i64>) -> Result<SimpleResponse> {
+        // For this special case, we need to use a custom implementation
+        // since the API uses GET parameters + POST body format
+        use reqwest::Client;
+        
+        let request = ReorderQueueFullRequest {
+            episode_ids,
+        };
+        
+        let endpoint = format!("/api/data/reorder_queue?user_id={}", self.user_id());
+        let url = format!("{}{}", self.auth_state().server_name, endpoint);
+        
+        let client = Client::new();
+        let response = client
+            .post(&url)
+            .header("Api-Key", &self.auth_state().api_key)
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if response.status().is_success() {
+            let response_text: String = response.text().await?;
+            log::debug!("API response for {}: {}", endpoint, response_text);
+            let data: SimpleResponse = serde_json::from_str(&response_text)?;
+            Ok(data)
+        } else {
+            let status = response.status();
+            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
+            Err(anyhow::anyhow!("API request failed ({}): {}", status, error_text))
+        }
+    }
+
     /// Get queue statistics
     pub async fn get_queue_stats(&self) -> Result<QueueStats> {
         let endpoint = format!("/api/data/queue_stats/{}", self.user_id());
@@ -60,15 +99,32 @@ impl PinepodsClient {
 
     /// Move episode to top of queue
     pub async fn move_to_top_of_queue(&self, episode_id: i64) -> Result<SimpleResponse> {
-        self.reorder_queue_item(episode_id, 1).await
+        let mut queue = self.get_queue().await?;
+        queue.sort_by_key(|item| item.queue_position);
+        
+        // Find and remove the episode from its current position
+        if let Some(pos) = queue.iter().position(|item| item.episode_id == episode_id) {
+            let episode = queue.remove(pos);
+            queue.insert(0, episode); // Move to top
+        }
+        
+        let episode_ids: Vec<i64> = queue.iter().map(|item| item.episode_id).collect();
+        self.reorder_queue_full(episode_ids).await
     }
 
     /// Move episode to bottom of queue
     pub async fn move_to_bottom_of_queue(&self, episode_id: i64) -> Result<SimpleResponse> {
-        // Get current queue to determine the last position
-        let queue = self.get_queue().await?;
-        let last_position = queue.len() as i32;
-        self.reorder_queue_item(episode_id, last_position).await
+        let mut queue = self.get_queue().await?;
+        queue.sort_by_key(|item| item.queue_position);
+        
+        // Find and remove the episode from its current position
+        if let Some(pos) = queue.iter().position(|item| item.episode_id == episode_id) {
+            let episode = queue.remove(pos);
+            queue.push(episode); // Move to bottom
+        }
+        
+        let episode_ids: Vec<i64> = queue.iter().map(|item| item.episode_id).collect();
+        self.reorder_queue_full(episode_ids).await
     }
 
     /// Shuffle queue
@@ -84,9 +140,9 @@ impl PinepodsClient {
     }
 
     /// Mark current episode as played and get next
-    pub async fn advance_queue(&self, current_episode_id: i64) -> Result<Option<QueueItem>> {
+    pub async fn advance_queue(&self, current_episode_id: i64, is_youtube: bool) -> Result<Option<QueueItem>> {
         // Remove current episode from queue
-        self.remove_from_queue(current_episode_id).await?;
+        self.remove_from_queue(current_episode_id, is_youtube).await?;
         
         // Get the new next episode
         self.get_next_episode().await
