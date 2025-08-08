@@ -21,7 +21,7 @@ pub struct AppSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeSettings {
-    pub accent_color: String,
+    pub theme_name: String,
     pub use_borders: bool,
 }
 
@@ -52,7 +52,7 @@ impl Default for AppSettings {
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
-            accent_color: "Green".to_string(),
+            theme_name: "Light".to_string(),
             use_borders: true,
         }
     }
@@ -161,6 +161,10 @@ impl SettingsManager {
 
     pub fn selected_audio_device(&self) -> Option<String> {
         self.settings.audio.selected_device.clone()
+    }
+
+    pub fn theme_name(&self) -> &str {
+        &self.settings.theme.theme_name
     }
 }
 
