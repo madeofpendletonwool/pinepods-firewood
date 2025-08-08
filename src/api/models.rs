@@ -218,18 +218,21 @@ pub struct EpisodeRequest {
 pub struct AddToQueueRequest {
     pub episode_id: i64,
     pub user_id: i64,
+    pub is_youtube: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RemoveFromQueueRequest {
     pub episode_id: i64,
     pub user_id: i64,
+    pub is_youtube: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct SaveEpisodeRequest {
     pub episode_id: i64,
     pub user_id: i64,
+    pub is_youtube: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -249,6 +252,11 @@ pub struct DownloadEpisodeRequest {
 pub struct DeleteDownloadRequest {
     pub episode_id: i64,
     pub user_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReorderQueueFullRequest {
+    pub episode_ids: Vec<i64>,
 }
 
 // API Response wrappers
@@ -301,8 +309,17 @@ pub struct ApiResponse<T> {
 
 #[derive(Debug, Deserialize)]
 pub struct SimpleResponse {
-    pub success: bool,
+    pub detail: Option<String>,
+    pub data: Option<String>,
     pub message: Option<String>,
+}
+
+impl SimpleResponse {
+    pub fn get_message(&self) -> Option<&String> {
+        self.detail.as_ref()
+            .or(self.data.as_ref())
+            .or(self.message.as_ref())
+    }
 }
 
 // Search result item that matches the API response

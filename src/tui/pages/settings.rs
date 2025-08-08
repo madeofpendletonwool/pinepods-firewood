@@ -10,13 +10,14 @@ use ratatui::{
 use std::time::Instant;
 
 use crate::api::PinepodsClient;
-use crate::settings::SettingsManager;
+use crate::settings::{SettingsManager, get_available_audio_devices};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingItem {
     AutoLoadEpisodes,
     DefaultVolume,
     SkipInterval,
+    AudioDevice,
     RemoteControlEnabled,
     RemoteControlPort,
     ThemeAccentColor,
@@ -29,6 +30,7 @@ impl SettingItem {
             Self::AutoLoadEpisodes => "Auto-load Episodes",
             Self::DefaultVolume => "Default Volume",
             Self::SkipInterval => "Skip Interval (seconds)",
+            Self::AudioDevice => "Audio Output Device",
             Self::RemoteControlEnabled => "Remote Control",
             Self::RemoteControlPort => "Remote Control Port",
             Self::ThemeAccentColor => "Accent Color",
@@ -41,6 +43,7 @@ impl SettingItem {
             Self::AutoLoadEpisodes => "Auto-load episodes when navigating podcasts/downloads",
             Self::DefaultVolume => "Default volume level (0-100%)",
             Self::SkipInterval => "Number of seconds to skip forward/backward",
+            Self::AudioDevice => "Select audio output device",
             Self::RemoteControlEnabled => "Enable remote control HTTP server",
             Self::RemoteControlPort => "Port for remote control server",
             Self::ThemeAccentColor => "Theme accent color",
@@ -53,6 +56,7 @@ const ALL_SETTINGS: &[SettingItem] = &[
     SettingItem::AutoLoadEpisodes,
     SettingItem::DefaultVolume,
     SettingItem::SkipInterval,
+    SettingItem::AudioDevice,
     SettingItem::RemoteControlEnabled,
     SettingItem::RemoteControlPort,
     SettingItem::ThemeAccentColor,
@@ -70,6 +74,9 @@ pub struct SettingsPage {
     error_message: Option<String>,
     success_message: Option<String>,
     
+    // Audio device management
+    available_audio_devices: Vec<(String, String)>,
+    
     // Animation
     last_update: Instant,
 }
@@ -85,12 +92,15 @@ impl SettingsPage {
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
         
+        let available_audio_devices = get_available_audio_devices();
+        
         Self {
             client,
             settings_manager,
             list_state,
             error_message: None,
             success_message: None,
+            available_audio_devices,
             last_update: Instant::now(),
         }
     }
@@ -178,6 +188,9 @@ impl SettingsPage {
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
+                    SettingItem::AudioDevice => {
+                        self.cycle_audio_device().await?;
+                    }
                     SettingItem::UseBorders => {
                         let result = self.settings_manager.update(|s| {
                             s.theme.use_borders = !s.theme.use_borders;
@@ -232,6 +245,9 @@ impl SettingsPage {
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
+                    SettingItem::AudioDevice => {
+                        self.cycle_audio_device().await?;
+                    }
                     _ => {}
                 }
             }
@@ -273,10 +289,51 @@ impl SettingsPage {
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
+                    SettingItem::AudioDevice => {
+                        self.cycle_audio_device().await?;
+                    }
                     _ => {}
                 }
             }
         }
+        Ok(())
+    }
+
+    async fn cycle_audio_device(&mut self) -> Result<()> {
+        if self.available_audio_devices.is_empty() {
+            self.error_message = Some("No audio devices available".to_string());
+            return Ok(());
+        }
+        
+        let current_device = self.settings_manager.selected_audio_device();
+        let current_index = if let Some(ref device) = current_device {
+            self.available_audio_devices.iter()
+                .position(|(name, _)| name == device)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        
+        let next_index = (current_index + 1) % self.available_audio_devices.len();
+        let (next_device, display_name) = &self.available_audio_devices[next_index];
+        
+        let result = self.settings_manager.update(|s| {
+            s.audio.selected_device = if next_device == "default" {
+                None
+            } else {
+                Some(next_device.clone())
+            };
+        });
+        
+        match result {
+            Ok(_) => {
+                self.success_message = Some(format!("Audio device: {}", display_name));
+            }
+            Err(e) => {
+                self.error_message = Some(format!("Failed to save: {}", e));
+            }
+        }
+        
         Ok(())
     }
 
@@ -291,6 +348,8 @@ impl SettingsPage {
             .constraints([
                 Constraint::Length(3), // Header
                 Constraint::Min(5),    // Settings list
+                Constraint::Length(4), // Connection info
+                Constraint::Length(3), // Web UI message
                 Constraint::Length(3), // Footer/status
             ])
             .split(area);
@@ -310,8 +369,14 @@ impl SettingsPage {
         // Settings list
         self.render_settings_list(frame, main_layout[1]);
 
+        // Connection info
+        self.render_connection_info(frame, main_layout[2]);
+
+        // Web UI message
+        self.render_web_ui_message(frame, main_layout[3]);
+
         // Footer with controls
-        self.render_footer(frame, main_layout[2]);
+        self.render_footer(frame, main_layout[4]);
     }
 
     fn render_settings_list(&mut self, frame: &mut Frame, area: Rect) {
@@ -332,6 +397,16 @@ impl SettingsPage {
                     }
                     SettingItem::SkipInterval => {
                         format!("{}s", settings.skip_interval)
+                    }
+                    SettingItem::AudioDevice => {
+                        if let Some(device) = &settings.audio.selected_device {
+                            self.available_audio_devices.iter()
+                                .find(|(name, _)| name == device)
+                                .map(|(_, display)| display.clone())
+                                .unwrap_or_else(|| device.clone())
+                        } else {
+                            "System Default".to_string()
+                        }
                     }
                     SettingItem::RemoteControlEnabled => {
                         if settings.remote_control.enabled { "Enabled" } else { "Disabled" }.to_string()
@@ -427,6 +502,56 @@ impl SettingsPage {
                     .border_style(Style::default().fg(Color::DarkGray))
             );
         frame.render_widget(status, layout[1]);
+    }
+
+    fn render_connection_info(&self, frame: &mut Frame, area: Rect) {
+        let settings = self.settings_manager.get();
+        let port = settings.remote_control.preferred_port;
+        
+        // Try to get local IP address
+        let ip_address = match local_ip_address::local_ip() {
+            Ok(ip) => ip.to_string(),
+            Err(_) => "127.0.0.1".to_string(),
+        };
+        
+        let connection_text = format!(
+            "Add this Firewood server to your PinePods instance:\nIP Address: {}  •  Port: {}",
+            ip_address, port
+        );
+        
+        let connection_info = Paragraph::new(connection_text)
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title("🔗 PinePods Integration")
+                    .border_style(Style::default().fg(Color::Yellow))
+            );
+        frame.render_widget(connection_info, area);
+    }
+
+    fn render_web_ui_message(&self, frame: &mut Frame, area: Rect) {
+        // Get server name from client if available
+        let server_name = "your PinePods server"; // Could be enhanced to get actual server name
+        
+        let message_text = format!(
+            "Additional server settings available on the web UI at {}",
+            server_name
+        );
+        
+        let web_ui_message = Paragraph::new(message_text)
+            .style(Style::default().fg(Color::Cyan))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .title("🌐 Web Interface")
+                    .border_style(Style::default().fg(Color::Cyan))
+            );
+        frame.render_widget(web_ui_message, area);
     }
 
     // Getter for settings manager (to be used by other parts of the app)

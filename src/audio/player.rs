@@ -2,6 +2,7 @@ use anyhow::Result;
 use rodio::{Decoder, Sink};
 use rodio::stream::{OutputStream, OutputStreamBuilder};
 use rodio::mixer::Mixer;
+use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use std::{
     io::Cursor,
     sync::{Arc, Mutex},
@@ -63,7 +64,16 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new(client: PinepodsClient) -> Result<Self> {
-        let output_stream = OutputStreamBuilder::open_default_stream()?;
+        Self::new_with_device(client, None)
+    }
+
+    pub fn new_with_device(client: PinepodsClient, device_name: Option<String>) -> Result<Self> {
+        let output_stream = if let Some(ref name) = device_name {
+            Self::create_stream_for_device(name)?
+        } else {
+            OutputStreamBuilder::open_default_stream()?
+        };
+        
         let mixer = output_stream.mixer();
         let state = Arc::new(Mutex::new(AudioPlayerState::default()));
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
@@ -83,6 +93,27 @@ impl AudioPlayer {
             _output_stream: Arc::new(output_stream),
             client,
         })
+    }
+
+    fn create_stream_for_device(device_name: &str) -> Result<OutputStream> {
+        if device_name == "default" {
+            return Ok(OutputStreamBuilder::open_default_stream()?);
+        }
+
+        let host = rodio::cpal::default_host();
+        let devices = host.output_devices()?;
+        
+        for device in devices {
+            if let Ok(name) = device.name() {
+                if name == device_name {
+                    log::info!("Using audio device: {}", name);
+                    return Ok(OutputStreamBuilder::from_device(device)?.open_stream()?);
+                }
+            }
+        }
+        
+        log::warn!("Audio device '{}' not found, falling back to default", device_name);
+        Ok(OutputStreamBuilder::open_default_stream()?)
     }
 
     pub fn get_state(&self) -> AudioPlayerState {
@@ -169,6 +200,7 @@ impl AudioPlayer {
 
                     // Stop any existing playback
                     if let Some(s) = sink.take() {
+                        log::warn!("STOPPING EXISTING SINK for new episode: {}", episode.episode_title);
                         s.stop();
                     }
 
@@ -184,8 +216,9 @@ impl AudioPlayer {
                             
                             // Use episode duration from metadata
                             let episode_duration = Duration::from_secs(episode.episode_duration as u64);
-                            let start_position = Duration::from_secs(episode.listen_duration.unwrap_or(1) as u64); // Never start at 0, use 1 second minimum
-                            log::info!("Setting duration: {:?}, start position: {:?}", episode_duration, start_position);
+                            let listen_duration_value = episode.listen_duration.unwrap_or(1);
+                            let start_position = Duration::from_secs(listen_duration_value as u64); // Never start at 0, use 1 second minimum
+                            log::info!("Setting duration: {:?}, start position: {:?} (from listen_duration: {:?})", episode_duration, start_position, episode.listen_duration);
                             
                             // Update state
                             {
@@ -193,9 +226,14 @@ impl AudioPlayer {
                                 log::info!("Updating playback state to Playing");
                                 state_guard.playback_state = PlaybackState::Playing;
                                 state_guard.total_duration = episode_duration;
-                                state_guard.current_position = start_position;
+                                // For beamed content with artificial start positions, start from 0 to match sink
+                                state_guard.current_position = if start_position <= Duration::from_secs(2) { 
+                                    Duration::ZERO 
+                                } else { 
+                                    start_position 
+                                };
                                 state_guard.volume = 0.7;
-                                log::info!("State updated successfully");
+                                log::info!("State updated successfully, position: {:?}", state_guard.current_position);
                             }
                             
                             log::info!("Setting volume and starting playback");
@@ -243,6 +281,7 @@ impl AudioPlayer {
                 
                 PlayerCommand::Stop => {
                     if let Some(s) = sink.take() {
+                        log::warn!("STOP COMMAND: Removing sink and stopping playback");
                         s.stop();
                     }
                     
@@ -492,9 +531,20 @@ impl AudioPlayer {
                         let actual_position = s.get_pos();
                         log::debug!("Position update: sink pos={:?}, state pos={:?}, sink len={}, empty={}", 
                                   actual_position, state_guard.current_position, s.len(), s.empty());
-                        state_guard.current_position = actual_position;
+                        
+                        // Check if sink became empty without us knowing
+                        if s.empty() {
+                            log::error!("DETECTED EMPTY SINK: Sink became empty during position update! This will stop playback.");
+                            state_guard.playback_state = PlaybackState::Stopped;
+                        } else {
+                            state_guard.current_position = actual_position;
+                        }
                         last_position_update = Instant::now();
+                    } else {
+                        log::debug!("Position update skipped - playback state: {:?}", state_guard.playback_state);
                     }
+                } else {
+                    log::debug!("Position update skipped - no sink");
                 }
             }
         }
@@ -532,9 +582,6 @@ impl AudioPlayer {
     }
 }
 
-impl Drop for AudioPlayer {
-    fn drop(&mut self) {
-        // Send stop command to clean up resources
-        let _ = self.command_sender.send(PlayerCommand::Stop);
-    }
-}
+// Note: Removed Drop implementation that was sending Stop commands
+// when AudioPlayer instances were dropped. This was causing issues
+// with remote control where cloned instances would stop playback.

@@ -162,7 +162,7 @@ impl EpisodesPage {
         // Reset selection if needed
         if self.filtered_episodes.is_empty() {
             self.list_state.select(None);
-        } else if self.list_state.selected().unwrap_or(0) >= self.filtered_episodes.len() {
+        } else if self.list_state.selected().is_none() || self.list_state.selected().unwrap_or(0) >= self.filtered_episodes.len() {
             self.list_state.select(Some(0));
         }
     }
@@ -226,14 +226,27 @@ impl EpisodesPage {
                 KeyCode::Char('s') => {
                     if let Some(selected) = self.list_state.selected() {
                         if let Some(episode) = self.filtered_episodes.get(selected) {
-                            self.toggle_saved(episode.episode_id.unwrap_or(0) as i64).await?;
+                            if let Some(episode_id) = episode.episode_id {
+                                log::debug!("Save key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                self.toggle_saved(episode_id as i64).await?;
+                            } else {
+                                log::error!("No episode ID found for episode: {}", episode.episode_title);
+                                self.error_message = Some("❌ Cannot save episode: missing ID".to_string());
+                            }
                         }
                     }
                 }
-                KeyCode::Char('q') => {
+                KeyCode::Char('a') => {
+                    log::debug!("Queue key 'a' pressed - starting handler");
                     if let Some(selected) = self.list_state.selected() {
                         if let Some(episode) = self.filtered_episodes.get(selected) {
-                            self.toggle_queued(episode.episode_id.unwrap_or(0) as i64).await?;
+                            if let Some(episode_id) = episode.episode_id {
+                                log::debug!("Queue key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                self.toggle_queued(episode_id as i64).await?;
+                            } else {
+                                log::error!("No episode ID found for episode: {}", episode.episode_title);
+                                self.error_message = Some("❌ Cannot queue episode: missing ID".to_string());
+                            }
                         }
                     }
                 }
@@ -266,13 +279,32 @@ impl EpisodesPage {
         // Find the episode in our data
         if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id.unwrap_or(0) == episode_id) {
             let is_saved = episode.saved.unwrap_or(false);
+            let is_youtube = episode.is_youtube.unwrap_or(false);
             
             if is_saved {
-                self.client.unsave_episode(episode_id).await?;
-                episode.saved = Some(false);
+                match self.client.unsave_episode(episode_id, is_youtube).await {
+                    Ok(_) => {
+                        episode.saved = Some(false);
+                        self.error_message = Some("📌 Episode removed from saved".to_string());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to unsave episode: {}", e);
+                        self.error_message = Some(format!("❌ Failed to unsave episode: {}", e));
+                        return Ok(());
+                    }
+                }
             } else {
-                self.client.save_episode(episode_id).await?;
-                episode.saved = Some(true);
+                match self.client.save_episode(episode_id, is_youtube).await {
+                    Ok(_) => {
+                        episode.saved = Some(true);
+                        self.error_message = Some("⭐ Episode saved successfully!".to_string());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to save episode: {}", e);
+                        self.error_message = Some(format!("❌ Failed to save episode: {}", e));
+                        return Ok(());
+                    }
+                }
             }
             
             self.apply_filters();
@@ -281,16 +313,39 @@ impl EpisodesPage {
     }
 
     async fn toggle_queued(&mut self, episode_id: i64) -> Result<()> {
+        log::debug!("toggle_queued called with episode_id: {}", episode_id);
         // Find the episode in our data  
         if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id.unwrap_or(0) == episode_id) {
             let is_queued = episode.queued.unwrap_or(false);
+            let is_youtube = episode.is_youtube.unwrap_or(false);
+            log::debug!("Episode found - is_queued: {}, is_youtube: {}", is_queued, is_youtube);
             
             if is_queued {
-                self.client.remove_from_queue(episode_id).await?;
-                episode.queued = Some(false);
+                log::debug!("Calling remove_from_queue for episode {}", episode_id);
+                match self.client.remove_from_queue(episode_id, is_youtube).await {
+                    Ok(_) => {
+                        episode.queued = Some(false);
+                        self.error_message = Some("📝 Episode removed from queue".to_string());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to remove from queue: {}", e);
+                        self.error_message = Some(format!("❌ Failed to remove from queue: {}", e));
+                        return Ok(());
+                    }
+                }
             } else {
-                self.client.add_to_queue(episode_id).await?;
-                episode.queued = Some(true);
+                log::debug!("Calling add_to_queue for episode {}", episode_id);
+                match self.client.add_to_queue(episode_id, is_youtube).await {
+                    Ok(_) => {
+                        episode.queued = Some(true);
+                        self.error_message = Some("📝 Episode queued successfully!".to_string());
+                    }
+                    Err(e) => {
+                        log::error!("Failed to add to queue: {}", e);
+                        self.error_message = Some(format!("❌ Failed to add to queue: {}", e));
+                        return Ok(());
+                    }
+                }
             }
             
             self.apply_filters();
@@ -348,7 +403,7 @@ impl EpisodesPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("📱 Episodes")
+                    .title("📱 Feed")
             );
         frame.render_widget(filter, header_chunks[0]);
 
@@ -461,7 +516,7 @@ impl EpisodesPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Episodes")
+                    .title("Feed")
             )
             .highlight_style(
                 Style::default()
@@ -487,7 +542,7 @@ impl EpisodesPage {
                 ("f", "Filter"),
                 ("/", "Search"),
                 ("s", "Save"),
-                ("q", "Queue"),
+                ("a", "Queue"),
                 ("r", "Refresh"),
             ]
         };

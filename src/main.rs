@@ -22,6 +22,18 @@ async fn main() -> Result<()> {
     // Initialize logging
     env_logger::init();
 
+    // Set up panic hook to capture panic messages
+    std::panic::set_hook(Box::new(|panic_info| {
+        eprintln!("PANIC: {:?}", panic_info);
+        if let Some(location) = panic_info.location() {
+            eprintln!("PANIC LOCATION: {}:{}:{}", location.file(), location.line(), location.column());
+        }
+        if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
+            eprintln!("PANIC MESSAGE: {}", msg);
+        }
+        std::process::exit(1);
+    }));
+
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();

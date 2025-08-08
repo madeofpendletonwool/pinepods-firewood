@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 use crate::api::PinepodsClient;
 use crate::auth::SessionInfo;
 use crate::audio::AudioPlayer;
+use crate::settings::SettingsManager;
 use super::pages::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -139,8 +140,16 @@ impl TuiApp {
     pub fn new(session_info: SessionInfo) -> Result<Self> {
         let client = PinepodsClient::new(session_info.auth_state.clone());
         
-        // Create audio player
-        let audio_player = AudioPlayer::new(client.clone())?;
+        // Load settings to get audio device preference
+        let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
+            log::warn!("Failed to load settings, using defaults: {}", e);
+            SettingsManager::new().expect("Failed to create fallback settings")
+        });
+        
+        let selected_device = settings_manager.selected_audio_device();
+        
+        // Create audio player with selected device
+        let audio_player = AudioPlayer::new_with_device(client.clone(), selected_device)?;
         
         // Create episodes page and set up audio player
         let mut episodes_page = EpisodesPage::new(client.clone());
