@@ -13,6 +13,7 @@ use std::time::Instant;
 use crate::api::{PinepodsClient, DownloadItem};
 use crate::audio::AudioPlayer;
 use crate::settings::SettingsManager;
+use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FocusPanel {
@@ -45,6 +46,9 @@ pub struct DownloadsPage {
     
     // Settings
     settings_manager: SettingsManager,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +84,7 @@ impl DownloadsPage {
             last_update: Instant::now(),
             audio_player: None,
             settings_manager,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -304,6 +309,11 @@ impl DownloadsPage {
         self.last_update = Instant::now();
         Ok(())
     }
+    
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let main_layout = Layout::default()
@@ -322,20 +332,22 @@ impl DownloadsPage {
     }
 
     fn render_podcasts_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if self.podcasts_with_downloads.is_empty() && !self.loading {
             let empty_msg = "No downloads found. Press 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title("📥 Podcasts with Downloads")
+                        .title_style(Style::default().fg(theme_colors.accent))
                         .border_style(if self.focused_panel == FocusPanel::Podcasts {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(theme_colors.primary)
                         } else {
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(theme_colors.border)
                         })
                 );
             frame.render_widget(empty, area);
@@ -348,11 +360,11 @@ impl DownloadsPage {
                 let download_count = podcast.download_count;
                 
                 let line1 = Line::from(vec![
-                    Span::styled(&podcast.podcast_name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled(&podcast.podcast_name, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(format!("{} downloads", download_count), Style::default().fg(Color::Cyan)),
+                    Span::styled(format!("{} downloads", download_count), Style::default().fg(theme_colors.accent)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -365,15 +377,17 @@ impl DownloadsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("📥 Podcasts with Downloads")
+                    .title_style(Style::default().fg(theme_colors.accent))
                     .border_style(if self.focused_panel == FocusPanel::Podcasts {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(theme_colors.primary)
                     } else {
-                        Style::default().fg(Color::Gray)
+                        Style::default().fg(theme_colors.border)
                     })
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -387,6 +401,7 @@ impl DownloadsPage {
     }
 
     fn render_downloads_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let title = if let Some(selected) = self.podcast_list_state.selected() {
             if let Some(podcast) = self.podcasts_with_downloads.get(selected) {
                 format!("📥 Downloads - {}", podcast.podcast_name)
@@ -406,16 +421,17 @@ impl DownloadsPage {
 
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(title)
+                        .title_style(Style::default().fg(theme_colors.accent))
                         .border_style(if self.focused_panel == FocusPanel::Downloads {
-                            Style::default().fg(Color::Green)
+                            Style::default().fg(theme_colors.primary)
                         } else {
-                            Style::default().fg(Color::Gray)
+                            Style::default().fg(theme_colors.border)
                         })
                 );
             frame.render_widget(empty, area);
@@ -446,13 +462,13 @@ impl DownloadsPage {
                 let status = format!(" {}", indicators.join(" "));
 
                 let line1 = Line::from(vec![
-                    Span::styled(&download.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(&download.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(pub_date, Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                    Span::styled(pub_date, Style::default().fg(theme_colors.warning)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -465,15 +481,17 @@ impl DownloadsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(title)
+                    .title_style(Style::default().fg(theme_colors.accent))
                     .border_style(if self.focused_panel == FocusPanel::Downloads {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(theme_colors.primary)
                     } else {
-                        Style::default().fg(Color::Gray)
+                        Style::default().fg(theme_colors.border)
                     })
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -494,14 +512,20 @@ impl DownloadsPage {
                 height: 1,
             };
             
+            let color = if error.starts_with("🎵") {
+                theme_colors.success
+            } else {
+                theme_colors.error
+            };
             let error_msg = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center);
             frame.render_widget(error_msg, error_area);
         }
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect, message: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -523,14 +547,14 @@ impl DownloadsPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
     }

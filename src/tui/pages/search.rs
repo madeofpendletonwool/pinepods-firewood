@@ -11,6 +11,7 @@ use std::time::Instant;
 
 use crate::api::{PinepodsClient, SearchResultItem};
 use crate::audio::AudioPlayer;
+use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum InputMode {
@@ -37,6 +38,9 @@ pub struct SearchPage {
     
     // Audio player
     audio_player: Option<AudioPlayer>,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl SearchPage {
@@ -55,6 +59,7 @@ impl SearchPage {
             success_message: None,
             last_update: Instant::now(),
             audio_player: None,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -197,6 +202,11 @@ impl SearchPage {
         self.last_update = Instant::now();
         Ok(())
     }
+    
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let main_layout = Layout::default()
@@ -219,14 +229,15 @@ impl SearchPage {
     }
 
     fn render_search_input(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let input_style = match self.input_mode {
-            InputMode::Normal => Style::default().fg(Color::Gray),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
+            InputMode::Normal => Style::default().fg(theme_colors.text_secondary),
+            InputMode::Editing => Style::default().fg(theme_colors.warning),
         };
 
         let border_style = match self.input_mode {
-            InputMode::Normal => Style::default().fg(Color::Gray),
-            InputMode::Editing => Style::default().fg(Color::Yellow),
+            InputMode::Normal => Style::default().fg(theme_colors.border),
+            InputMode::Editing => Style::default().fg(theme_colors.warning),
         };
 
         let title = match self.input_mode {
@@ -247,6 +258,7 @@ impl SearchPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(title)
+                    .title_style(Style::default().fg(theme_colors.accent))
                     .border_style(border_style)
             );
 
@@ -262,6 +274,7 @@ impl SearchPage {
     }
 
     fn render_results_list(&mut self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         if self.search_results.is_empty() && !self.loading {
             let empty_msg = if self.search_input.is_empty() {
                 "Enter a search term to find episodes and podcasts"
@@ -271,13 +284,14 @@ impl SearchPage {
 
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(theme_colors.text_secondary))
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .title("Search Results")
-                        .border_style(Style::default().fg(Color::Cyan))
+                        .title("🔍 Search Results")
+                        .title_style(Style::default().fg(theme_colors.accent))
+                        .border_style(Style::default().fg(theme_colors.border))
                 );
             frame.render_widget(empty, area);
             return;
@@ -313,20 +327,20 @@ impl SearchPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(&result.episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                    Span::styled(status, Style::default().fg(Color::Green)),
+                    Span::styled(&result.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(&result.podcast_name, Style::default().fg(Color::Cyan)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(Color::Gray)),
+                    Span::styled(&result.podcast_name, Style::default().fg(theme_colors.accent)),
+                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
+                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 // Third line with description (truncated)
                 let description = truncate_text(&result.episode_description, 80);
                 let line3 = Line::from(vec![
-                    Span::styled(description, Style::default().fg(Color::DarkGray)),
+                    Span::styled(description, Style::default().fg(theme_colors.text_secondary)),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2, line3]))
@@ -339,11 +353,13 @@ impl SearchPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(format!("🔍 Search Results ({})", self.search_results.len()))
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .title_style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.border))
             )
             .highlight_style(
                 Style::default()
-                    .bg(Color::DarkGray)
+                    .bg(theme_colors.highlight)
+                    .fg(theme_colors.background)
                     .add_modifier(Modifier::BOLD)
             )
             .highlight_symbol("► ");
@@ -357,6 +373,7 @@ impl SearchPage {
     }
 
     fn render_status(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -372,24 +389,25 @@ impl SearchPage {
         };
 
         let help = Paragraph::new(help_text)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme_colors.text_secondary))
             .alignment(Alignment::Left)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Controls")
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.border))
             );
         frame.render_widget(help, layout[0]);
 
         // Status message
         let (message, color) = if let Some(ref error) = self.error_message {
-            (format!("❌ {}", error), Color::Red)
+            (format!("❌ {}", error), theme_colors.error)
         } else if let Some(ref success) = self.success_message {
-            (format!("✅ {}", success), Color::Green)
+            (format!("✅ {}", success), theme_colors.success)
         } else {
-            ("Ready to search".to_string(), Color::Gray)
+            ("Ready to search".to_string(), theme_colors.text_secondary)
         };
 
         let status = Paragraph::new(message)
@@ -399,13 +417,15 @@ impl SearchPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Status")
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title("📊 Status")
+                    .title_style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.border))
             );
         frame.render_widget(status, layout[1]);
     }
 
     fn render_loading_overlay(&self, frame: &mut Frame, area: Rect, message: &str) {
+        let theme_colors = self.theme_manager.get_colors();
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -427,14 +447,14 @@ impl SearchPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .style(Style::default().bg(Color::Black))
+                    .border_style(Style::default().fg(theme_colors.accent))
+                    .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
     }

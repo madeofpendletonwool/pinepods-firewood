@@ -11,10 +11,14 @@ use std::time::Duration;
 
 use crate::audio::{AudioPlayer, AudioPlayerState, PlaybackState};
 use crate::api::Episode;
+use crate::theme::ThemeManager;
 
 pub struct PlayerPage {
     audio_player: AudioPlayer,
     last_state: AudioPlayerState,
+    
+    // Theme management
+    theme_manager: ThemeManager,
 }
 
 impl PlayerPage {
@@ -22,6 +26,7 @@ impl PlayerPage {
         Self {
             last_state: audio_player.get_state(),
             audio_player,
+            theme_manager: ThemeManager::new(),
         }
     }
 
@@ -64,6 +69,11 @@ impl PlayerPage {
         self.last_state = self.audio_player.get_state();
         Ok(())
     }
+    
+    // Method to update theme from external source (like server sync)
+    pub fn update_theme(&mut self, theme_name: &str) {
+        self.theme_manager.set_theme(theme_name);
+    }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let current_state = self.audio_player.get_state();
@@ -100,35 +110,37 @@ impl PlayerPage {
     }
 
     fn render_title(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
         let title = Paragraph::new("🎵 Audio Player")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(Style::default().fg(theme_colors.accent))
             );
         frame.render_widget(title, area);
     }
 
     fn render_episode_info(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+        let theme_colors = self.theme_manager.get_colors();
         let content = if let Some(ref episode) = state.current_episode {
             let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast");
             let episode_title = &episode.episode_title;
             
             vec![
                 Line::from(vec![
-                    Span::styled("Podcast: ", Style::default().fg(Color::Gray)),
-                    Span::styled(podcast_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                    Span::styled("Podcast: ", Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(podcast_name, Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::from(vec![
-                    Span::styled("Episode: ", Style::default().fg(Color::Gray)),
-                    Span::styled(episode_title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                    Span::styled("Episode: ", Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]),
                 Line::from(""), // Spacer
                 Line::from(vec![
-                    Span::styled("Status: ", Style::default().fg(Color::Gray)),
+                    Span::styled("Status: ", Style::default().fg(theme_colors.text_secondary)),
                     Span::styled(self.format_playback_state(&state.playback_state), self.get_status_style(&state.playback_state)),
                 ]),
             ]
@@ -136,7 +148,7 @@ impl PlayerPage {
             vec![
                 Line::from(Span::styled(
                     "No episode loaded",
-                    Style::default().fg(Color::Gray).add_modifier(Modifier::ITALIC),
+                    Style::default().fg(theme_colors.text_secondary).add_modifier(Modifier::ITALIC),
                 )),
             ]
         };
@@ -147,6 +159,8 @@ impl PlayerPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("📻 Now Playing")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             )
             .wrap(Wrap { trim: true });
 
@@ -154,6 +168,7 @@ impl PlayerPage {
     }
 
     fn render_progress(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+        let theme_colors = self.theme_manager.get_colors();
         let progress = if state.total_duration.as_secs() > 0 {
             state.current_position.as_secs_f64() / state.total_duration.as_secs_f64()
         } else {
@@ -166,8 +181,10 @@ impl PlayerPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Progress")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             )
-            .gauge_style(Style::default().fg(Color::Blue).bg(Color::DarkGray))
+            .gauge_style(Style::default().fg(theme_colors.primary).bg(theme_colors.container))
             .ratio(progress)
             .label(format!("{:.1}%", progress * 100.0));
 
@@ -175,15 +192,16 @@ impl PlayerPage {
     }
 
     fn render_time_info(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+        let theme_colors = self.theme_manager.get_colors();
         let current_time = Self::format_duration(state.current_position);
         let total_time = Self::format_duration(state.total_duration);
         let remaining_time = Self::format_duration(state.total_duration.saturating_sub(state.current_position));
 
         let time_info = Paragraph::new(vec![
             Line::from(vec![
-                Span::styled("Time: ", Style::default().fg(Color::Gray)),
-                Span::styled(format!("{} / {}", current_time, total_time), Style::default().fg(Color::White)),
-                Span::styled(format!(" (-{})", remaining_time), Style::default().fg(Color::Yellow)),
+                Span::styled("Time: ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled(format!("{} / {}", current_time, total_time), Style::default().fg(theme_colors.text)),
+                Span::styled(format!(" (-{})", remaining_time), Style::default().fg(theme_colors.warning)),
             ]),
         ])
         .alignment(Alignment::Center)
@@ -191,29 +209,31 @@ impl PlayerPage {
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(theme_colors.border))
         );
 
         frame.render_widget(time_info, area);
     }
 
     fn render_controls(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+        let theme_colors = self.theme_manager.get_colors();
         let controls_text = vec![
             Line::from(vec![
-                Span::styled("Space", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Play/Pause  "),
-                Span::styled("←/→", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" ±15s  "),
-                Span::styled("↑/↓", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Volume  "),
-                Span::styled("S", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::raw(" Stop"),
+                Span::styled("Space", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Play/Pause  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("←/→", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" ±15s  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("↑/↓", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Volume  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("S", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Stop", Style::default().fg(theme_colors.text_secondary)),
             ]),
             Line::from(vec![
-                Span::styled("Volume: ", Style::default().fg(Color::Gray)),
-                Span::styled(format!("{:.0}%", state.volume * 100.0), Style::default().fg(Color::Yellow)),
+                Span::styled("Volume: ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled(format!("{:.0}%", state.volume * 100.0), Style::default().fg(theme_colors.warning)),
                 Span::raw("  "),
-                Span::styled("Q/Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                Span::raw(" Close Player"),
+                Span::styled("Q/Esc", Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD)),
+                Span::styled(" Close Player", Style::default().fg(theme_colors.text_secondary)),
             ]),
         ];
 
@@ -223,29 +243,31 @@ impl PlayerPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Controls")
-                    .border_style(Style::default().fg(Color::Blue))
+                    .title("🔧 Controls")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             );
 
         frame.render_widget(controls, area);
     }
 
     fn render_status(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+        let theme_colors = self.theme_manager.get_colors();
         let status_text = match &state.playback_state {
             PlaybackState::Error(msg) => vec![
                 Line::from(vec![
-                    Span::styled("❌ Error: ", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                    Span::styled(msg, Style::default().fg(Color::Red)),
+                    Span::styled("❌ Error: ", Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD)),
+                    Span::styled(msg, Style::default().fg(theme_colors.error)),
                 ]),
             ],
             PlaybackState::Loading => vec![
-                Line::from(Span::styled("🔄 Loading audio...", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+                Line::from(Span::styled("🔄 Loading audio...", Style::default().fg(theme_colors.warning).add_modifier(Modifier::BOLD))),
             ],
             _ => vec![
                 Line::from(vec![
-                    Span::styled("Ready", Style::default().fg(Color::Green)),
+                    Span::styled("Ready", Style::default().fg(theme_colors.success)),
                     Span::raw(" - "),
-                    Span::styled("Press Space to play/pause, ←/→ to skip", Style::default().fg(Color::Gray)),
+                    Span::styled("Press Space to play/pause, ←/→ to skip", Style::default().fg(theme_colors.text_secondary)),
                 ]),
             ],
         };
@@ -255,7 +277,9 @@ impl PlayerPage {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .title("Status")
+                    .title("📊 Status")
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title_style(Style::default().fg(theme_colors.accent))
             )
             .wrap(Wrap { trim: true });
 
@@ -273,12 +297,13 @@ impl PlayerPage {
     }
 
     fn get_status_style(&self, state: &PlaybackState) -> Style {
+        let theme_colors = self.theme_manager.get_colors();
         match state {
-            PlaybackState::Stopped => Style::default().fg(Color::Gray),
-            PlaybackState::Playing => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-            PlaybackState::Paused => Style::default().fg(Color::Yellow),
-            PlaybackState::Loading => Style::default().fg(Color::Cyan),
-            PlaybackState::Error(_) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            PlaybackState::Stopped => Style::default().fg(theme_colors.text_secondary),
+            PlaybackState::Playing => Style::default().fg(theme_colors.success).add_modifier(Modifier::BOLD),
+            PlaybackState::Paused => Style::default().fg(theme_colors.warning),
+            PlaybackState::Loading => Style::default().fg(theme_colors.accent),
+            PlaybackState::Error(_) => Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD),
         }
     }
 
