@@ -180,9 +180,16 @@ async fn run_main_app<B: ratatui::prelude::Backend>(
         Ok::<(), anyhow::Error>(())
     }.await;
     
-    // Cancel the remote control server if it was started
+    // Gracefully stop the remote control server if it was started
     if let Some(handle) = remote_handle {
-        handle.abort();
+        log::info!("Shutting down remote control server...");
+        // Give it a moment to clean up
+        if tokio::time::timeout(Duration::from_secs(2), async {
+            handle.abort();
+            // The abort will trigger cleanup in the Drop impl
+        }).await.is_err() {
+            log::warn!("Remote control server shutdown timed out");
+        }
     }
     
     main_result

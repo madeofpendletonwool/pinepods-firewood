@@ -1,5 +1,7 @@
 use anyhow::Result;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, Sink};
+use rodio::stream::{OutputStream, OutputStreamBuilder};
+use rodio::mixer::Mixer;
 use std::{
     io::Cursor,
     sync::{Arc, Mutex},
@@ -61,22 +63,24 @@ pub struct AudioPlayer {
 
 impl AudioPlayer {
     pub fn new(client: PinepodsClient) -> Result<Self> {
-        let (_output_stream, output_handle) = OutputStream::try_default()?;
+        let output_stream = OutputStreamBuilder::open_default_stream()?;
+        let mixer = output_stream.mixer();
         let state = Arc::new(Mutex::new(AudioPlayerState::default()));
         let (command_sender, command_receiver) = mpsc::unbounded_channel();
 
         // Spawn the audio playback thread
         let audio_thread_state = Arc::clone(&state);
         let audio_client = client.clone();
+        let mixer_clone = mixer.clone();
         
         tokio::spawn(async move {
-            Self::audio_thread(audio_thread_state, output_handle, command_receiver, audio_client).await;
+            Self::audio_thread(audio_thread_state, mixer_clone, command_receiver, audio_client).await;
         });
 
         Ok(Self {
             state,
             command_sender,
-            _output_stream: Arc::new(_output_stream),
+            _output_stream: Arc::new(output_stream),
             client,
         })
     }
@@ -130,17 +134,28 @@ impl AudioPlayer {
         Ok(())
     }
 
+    pub fn seek(&self, position: Duration) -> Result<()> {
+        self.command_sender.send(PlayerCommand::Seek(position))?;
+        Ok(())
+    }
+
     async fn audio_thread(
         state: Arc<Mutex<AudioPlayerState>>,
-        output_handle: OutputStreamHandle,
+        mixer: Mixer,
         mut command_receiver: mpsc::UnboundedReceiver<PlayerCommand>,
         client: PinepodsClient,
     ) {
         let mut sink: Option<Sink> = None;
-        let mut position_tracker: Option<thread::JoinHandle<()>> = None;
         let mut last_update = Instant::now();
+        let mut last_position_update = Instant::now();
+        let mut pending_backward_seek: Option<(Duration, Instant)> = None;
 
-        while let Some(command) = command_receiver.recv().await {
+        loop {
+            // Use timeout to allow periodic updates even when no commands come in
+            let command = tokio::time::timeout(Duration::from_millis(500), command_receiver.recv()).await;
+            
+            // Handle command if one was received
+            if let Ok(Some(command)) = command {
             match command {
                 PlayerCommand::Play(episode) => {
                     log::info!("Playing episode: {}", episode.episode_title);
@@ -156,73 +171,55 @@ impl AudioPlayer {
                     if let Some(s) = sink.take() {
                         s.stop();
                     }
-                    
-                    if let Some(handle) = position_tracker.take() {
-                        // The thread will naturally exit when the sink stops
-                        handle.join().ok();
-                    }
 
                     // Create new sink
-                    match Sink::try_new(&output_handle) {
-                        Ok(new_sink) => {
-                            // Load and play the audio
-                            match Self::load_audio(&episode.episode_url).await {
-                                Ok((decoder, _)) => {
-                                    new_sink.append(decoder);
-                                    
-                                    // Use episode duration from metadata
-                                    let episode_duration = Duration::from_secs(episode.episode_duration as u64);
-                                    let start_position = Duration::from_secs(episode.listen_duration.unwrap_or(0) as u64);
-                                    
-                                    // Update state
-                                    {
-                                        let mut state_guard = state.lock().unwrap();
-                                        state_guard.playback_state = PlaybackState::Playing;
-                                        state_guard.total_duration = episode_duration;
-                                        state_guard.current_position = start_position;
-                                        state_guard.volume = 0.7;
-                                    }
-                                    
-                                    new_sink.set_volume(0.7);
-                                    sink = Some(new_sink);
-                                    last_update = Instant::now();
-
-                                    // Start position tracking thread
-                                    let state_clone = Arc::clone(&state);
-                                    position_tracker = Some(thread::spawn(move || {
-                                        let mut elapsed = start_position;
-                                        
-                                        loop {
-                                            thread::sleep(Duration::from_millis(500));
-                                            
-                                            let should_continue = {
-                                                let mut state_guard = state_clone.lock().unwrap();
-                                                if state_guard.playback_state == PlaybackState::Playing {
-                                                    elapsed += Duration::from_millis(500);
-                                                    state_guard.current_position = elapsed;
-                                                    true
-                                                } else {
-                                                    state_guard.playback_state != PlaybackState::Loading
-                                                }
-                                            };
-                                            
-                                            if !should_continue {
-                                                break;
-                                            }
-                                        }
-                                    }));
-                                }
-                                Err(e) => {
-                                    log::error!("Failed to load audio: {}", e);
-                                    let mut state_guard = state.lock().unwrap();
-                                    state_guard.playback_state = PlaybackState::Error(format!("Failed to load audio: {}", e));
-                                }
+                    let new_sink = Sink::connect_new(&mixer);
+                    
+                    // Load and play the audio
+                    match Self::load_audio(&episode.episode_url).await {
+                        Ok((decoder, _)) => {
+                            log::info!("Audio loaded successfully, appending to sink");
+                            new_sink.append(decoder);
+                            log::info!("Decoder appended to sink");
+                            
+                            // Use episode duration from metadata
+                            let episode_duration = Duration::from_secs(episode.episode_duration as u64);
+                            let start_position = Duration::from_secs(episode.listen_duration.unwrap_or(1) as u64); // Never start at 0, use 1 second minimum
+                            log::info!("Setting duration: {:?}, start position: {:?}", episode_duration, start_position);
+                            
+                            // Update state
+                            {
+                                let mut state_guard = state.lock().unwrap();
+                                log::info!("Updating playback state to Playing");
+                                state_guard.playback_state = PlaybackState::Playing;
+                                state_guard.total_duration = episode_duration;
+                                state_guard.current_position = start_position;
+                                state_guard.volume = 0.7;
+                                log::info!("State updated successfully");
                             }
+                            
+                            log::info!("Setting volume and starting playback");
+                            new_sink.set_volume(0.7);
+                            new_sink.play(); // Start playback
+                            
+                            // Check if sink is actually playing
+                            log::info!("Sink is_paused: {}, empty: {}, len: {}", new_sink.is_paused(), new_sink.empty(), new_sink.len());
+                            
+                            // Small delay to let playback start
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            log::info!("After delay - Sink position: {:?}, is_paused: {}, empty: {}", 
+                                      new_sink.get_pos(), new_sink.is_paused(), new_sink.empty());
+                            
+                            sink = Some(new_sink);
+                            last_update = Instant::now();
+                            log::info!("Playback started successfully");
+
+                            // Position tracking is now handled in the main audio thread loop
                         }
                         Err(e) => {
-                            log::error!("Failed to create sink: {}", e);
+                            log::error!("Failed to load audio: {}", e);
                             let mut state_guard = state.lock().unwrap();
-                            state_guard.playback_state = PlaybackState::Error(format!("Audio device error: {}", e));
+                            state_guard.playback_state = PlaybackState::Error(format!("Failed to load audio: {}", e));
                         }
                     }
                 }
@@ -248,9 +245,6 @@ impl AudioPlayer {
                     if let Some(s) = sink.take() {
                         s.stop();
                     }
-                    if let Some(handle) = position_tracker.take() {
-                        handle.join().ok();
-                    }
                     
                     let mut state_guard = state.lock().unwrap();
                     state_guard.playback_state = PlaybackState::Stopped;
@@ -258,62 +252,88 @@ impl AudioPlayer {
                 }
                 
                 PlayerCommand::SkipForward(duration) => {
-                    // Calculate new position
-                    let (should_restart, episode_clone, new_position) = {
-                        let mut state_guard = state.lock().unwrap();
-                        let new_pos = state_guard.current_position + duration;
-                        let clamped_pos = if new_pos < state_guard.total_duration {
-                            new_pos
-                        } else {
-                            state_guard.total_duration
+                    if let Some(ref s) = sink {
+                        // Calculate new position
+                        let (episode_clone, new_position) = {
+                            let mut state_guard = state.lock().unwrap();
+                            let new_pos = state_guard.current_position + duration;
+                            let clamped_pos = if new_pos < state_guard.total_duration {
+                                new_pos
+                            } else {
+                                state_guard.total_duration
+                            };
+                            
+                            state_guard.current_position = clamped_pos;
+                            (state_guard.current_episode.clone(), clamped_pos)
                         };
                         
-                        state_guard.current_position = clamped_pos;
+                        // Use rodio's built-in seeking
+                        match s.try_seek(new_position) {
+                            Ok(_) => {
+                                log::debug!("Successfully skipped forward to position: {:?}", new_position);
+                                last_update = Instant::now(); // Prevent immediate position override
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to seek in audio: {:?}, updating position anyway", e);
+                                // Even if seek fails, we still update our position tracking
+                                last_update = Instant::now(); // Prevent immediate position override
+                            }
+                        }
                         
-                        // Only restart if we have an active episode and sink
-                        let should_restart = state_guard.current_episode.is_some() && 
-                                            matches!(state_guard.playback_state, PlaybackState::Playing | PlaybackState::Paused);
-                        
-                        (should_restart, state_guard.current_episode.clone(), clamped_pos)
-                    };
-                    
-                    // Update server position
-                    if let Some(ref episode) = episode_clone {
-                        if let Some(episode_id) = episode.episode_id {
-                            let client_clone = client.clone();
-                            let position_secs = new_position.as_secs() as i64;
-                            tokio::spawn(async move {
-                                if let Err(e) = client_clone.update_listen_progress(episode_id, position_secs).await {
-                                    log::error!("Failed to update listen progress: {}", e);
+                        // Update server position (but only if episode has a valid ID)
+                        if let Some(ref episode) = episode_clone {
+                            if let Some(episode_id) = episode.episode_id {
+                                if episode_id > 0 { // Only update if we have a valid episode ID
+                                    let client_clone = client.clone();
+                                    let position_secs = new_position.as_secs() as i64;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = client_clone.update_listen_progress(episode_id, position_secs).await {
+                                            log::debug!("Failed to update listen progress (episode_id: {}): {}", episode_id, e);
+                                        }
+                                    });
                                 }
-                            });
+                            }
                         }
                     }
                 }
                 
                 PlayerCommand::SkipBackward(duration) => {
-                    // Calculate new position  
-                    let (should_restart, episode_clone, new_position) = {
-                        let mut state_guard = state.lock().unwrap();
-                        state_guard.current_position = state_guard.current_position.saturating_sub(duration);
+                    if let Some(ref s) = sink {
+                        // Calculate new position
+                        let (episode_clone, new_position) = {
+                            let mut state_guard = state.lock().unwrap();
+                            let new_pos = state_guard.current_position.saturating_sub(duration);
+                            state_guard.current_position = new_pos;
+                            (state_guard.current_episode.clone(), new_pos)
+                        };
                         
-                        // Only restart if we have an active episode and sink
-                        let should_restart = state_guard.current_episode.is_some() && 
-                                            matches!(state_guard.playback_state, PlaybackState::Playing | PlaybackState::Paused);
+                        // Try regular seeking first
+                        match s.try_seek(new_position) {
+                            Ok(_) => {
+                                log::debug!("Successfully skipped backward to position: {:?}", new_position);
+                                last_update = Instant::now(); // Prevent immediate position override
+                            }
+                            Err(_) => {
+                                // Random access not supported - debounce backward seeks
+                                log::debug!("Backward seek not supported, debouncing to position: {:?}", new_position);
+                                pending_backward_seek = Some((new_position, Instant::now()));
+                                last_update = Instant::now();
+                            }
+                        }
                         
-                        (should_restart, state_guard.current_episode.clone(), state_guard.current_position)
-                    };
-                    
-                    // Update server position
-                    if let Some(ref episode) = episode_clone {
-                        if let Some(episode_id) = episode.episode_id {
-                            let client_clone = client.clone();
-                            let position_secs = new_position.as_secs() as i64;
-                            tokio::spawn(async move {
-                                if let Err(e) = client_clone.update_listen_progress(episode_id, position_secs).await {
-                                    log::error!("Failed to update listen progress: {}", e);
+                        // Update server position (but only if episode has a valid ID)
+                        if let Some(ref episode) = episode_clone {
+                            if let Some(episode_id) = episode.episode_id {
+                                if episode_id > 0 { // Only update if we have a valid episode ID
+                                    let client_clone = client.clone();
+                                    let position_secs = new_position.as_secs() as i64;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = client_clone.update_listen_progress(episode_id, position_secs).await {
+                                            log::debug!("Failed to update listen progress (episode_id: {}): {}", episode_id, e);
+                                        }
+                                    });
                                 }
-                            });
+                            }
                         }
                     }
                 }
@@ -327,10 +347,47 @@ impl AudioPlayer {
                 }
                 
                 PlayerCommand::Seek(position) => {
-                    // Similar to skip, we'll update our position tracker
-                    let mut state_guard = state.lock().unwrap();
-                    if position <= state_guard.total_duration {
-                        state_guard.current_position = position;
+                    if let Some(ref s) = sink {
+                        // Calculate seek position
+                        let (episode_clone, seek_position) = {
+                            let mut state_guard = state.lock().unwrap();
+                            let clamped_position = if position <= state_guard.total_duration {
+                                position
+                            } else {
+                                state_guard.total_duration
+                            };
+                            
+                            state_guard.current_position = clamped_position;
+                            (state_guard.current_episode.clone(), clamped_position)
+                        };
+                        
+                        // Use rodio's built-in seeking
+                        match s.try_seek(seek_position) {
+                            Ok(_) => {
+                                log::debug!("Successfully seeked to position: {:?}", seek_position);
+                                last_update = Instant::now(); // Prevent immediate position override
+                            }
+                            Err(e) => {
+                                log::warn!("Failed to seek in audio: {:?}, updating position anyway", e);
+                                // Even if seek fails, we still update our position tracking
+                                last_update = Instant::now(); // Prevent immediate position override
+                            }
+                        }
+                        
+                        // Update server position for seek (but only if episode has a valid ID)
+                        if let Some(ref episode) = episode_clone {
+                            if let Some(episode_id) = episode.episode_id {
+                                if episode_id > 0 { // Only update if we have a valid episode ID
+                                    let client_clone = client.clone();
+                                    let position_secs = seek_position.as_secs() as i64;
+                                    tokio::spawn(async move {
+                                        if let Err(e) = client_clone.update_listen_progress(episode_id, position_secs).await {
+                                            log::debug!("Failed to update listen progress (episode_id: {}): {}", episode_id, e);
+                                        }
+                                    });
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -340,22 +397,103 @@ impl AudioPlayer {
                 if s.empty() && !matches!(state.lock().unwrap().playback_state, PlaybackState::Loading) {
                     let mut state_guard = state.lock().unwrap();
                     if matches!(state_guard.playback_state, PlaybackState::Playing) {
+                        log::error!("KILLING PLAYBACK: Sink is empty, setting state to Stopped. Sink len: {}, is_paused: {}, current episode: {:?}", 
+                                   s.len(), s.is_paused(), state_guard.current_episode.as_ref().map(|e| &e.episode_title));
                         state_guard.playback_state = PlaybackState::Stopped;
                         
                         // Update listen progress on the server
                         if let Some(ref episode) = state_guard.current_episode {
                             if let Some(episode_id) = episode.episode_id {
-                                let listen_duration = state_guard.current_position.as_secs() as i64;
-                                tokio::spawn({
-                                    let client_clone = client.clone();
-                                    async move {
-                                        if let Err(e) = client_clone.update_listen_progress(episode_id, listen_duration).await {
-                                            log::error!("Failed to update listen progress: {}", e);
+                                if episode_id > 0 { // Only update if we have a valid episode ID
+                                    let listen_duration = state_guard.current_position.as_secs() as i64;
+                                    tokio::spawn({
+                                        let client_clone = client.clone();
+                                        async move {
+                                            if let Err(e) = client_clone.update_listen_progress(episode_id, listen_duration).await {
+                                                log::debug!("Failed to update final listen progress (episode_id: {}): {}", episode_id, e);
+                                            }
                                         }
-                                    }
-                                });
+                                    });
+                                }
                             }
                         }
+                    }
+                }
+            }
+            } // End of command handling
+            
+            // Handle timeout case (no command received) - continue with periodic updates
+            else if let Err(_timeout) = command {
+                // Continue to position update logic below
+            } else {
+                // Channel closed, exit
+                break;
+            }
+            
+            // Check for pending backward seek (debounce - wait 300ms after last seek)
+            if let Some((seek_position, seek_time)) = pending_backward_seek {
+                if seek_time.elapsed() >= Duration::from_millis(300) {
+                    log::debug!("Executing debounced backward seek to: {:?}", seek_position);
+                    pending_backward_seek = None;
+                    
+                    // Get current episode for reload
+                    let episode_opt = {
+                        let state_guard = state.lock().unwrap();
+                        state_guard.current_episode.clone()
+                    };
+                    
+                    if let Some(episode) = episode_opt {
+                        // Stop current playback
+                        if let Some(ref s) = sink {
+                            s.stop();
+                        }
+                        
+                        // Load audio and seek to position
+                        match tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(Self::load_audio(&episode.episode_url))
+                        }) {
+                            Ok((decoder, _)) => {
+                                let new_sink = Sink::connect_new(&mixer);
+                                new_sink.append(decoder);
+                                
+                                // Try to seek to the target position
+                                if seek_position > Duration::ZERO {
+                                    let _ = new_sink.try_seek(seek_position);
+                                }
+                                
+                                new_sink.set_volume(0.7);
+                                sink = Some(new_sink);
+                                
+                                // Update state
+                                {
+                                    let mut state_guard = state.lock().unwrap();
+                                    state_guard.current_position = seek_position;
+                                    state_guard.playback_state = PlaybackState::Playing;
+                                }
+                                
+                                log::debug!("Debounced backward seek completed successfully");
+                            }
+                            Err(e) => {
+                                log::error!("Failed to reload audio for debounced backward seek: {}", e);
+                            }
+                        }
+                    }
+                    
+                    last_update = Instant::now();
+                }
+            }
+            
+            // Periodic position updates (every 500ms when playing)
+            if last_position_update.elapsed() >= Duration::from_millis(500) {
+                if let Some(ref s) = sink {
+                    let mut state_guard = state.lock().unwrap();
+                    if matches!(state_guard.playback_state, PlaybackState::Playing) {
+                        // Get actual position from rodio sink
+                        let actual_position = s.get_pos();
+                        log::debug!("Position update: sink pos={:?}, state pos={:?}, sink len={}, empty={}", 
+                                  actual_position, state_guard.current_position, s.len(), s.empty());
+                        state_guard.current_position = actual_position;
+                        last_position_update = Instant::now();
                     }
                 }
             }
@@ -368,10 +506,13 @@ impl AudioPlayer {
         // Fetch audio data
         let response = reqwest::get(url).await?;
         let bytes = response.bytes().await?;
+        log::info!("Downloaded {} bytes ({} MB) from {}", bytes.len(), bytes.len() / 1024 / 1024, url);
+        
         let cursor = Cursor::new(bytes);
         
         // Create decoder
         let decoder = Decoder::new(cursor)?;
+        log::info!("Decoder created successfully");
         
         // Try to determine duration (this is approximate since we can't seek with streaming)
         let duration = Duration::from_secs(3600); // Default to 1 hour, will be updated from episode data

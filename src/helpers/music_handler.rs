@@ -9,13 +9,16 @@ use std::{
 
 use lofty::{prelude::*, probe::Probe};
 use log::error;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, Sink};
+use rodio::stream::{OutputStream, OutputStreamBuilder};
+use rodio::mixer::Mixer;
 use crate::requests::PinepodsEpisodes;
 
 use super::gen_funcs;
 
 pub struct MusicHandle {
-    music_output: Arc<(OutputStream, OutputStreamHandle)>,
+    music_output: Arc<OutputStream>,
+    mixer: Arc<Mixer>,
     sink: Arc<Sink>,
     song_length: u16,
     time_played: Arc<Mutex<u16>>,
@@ -30,9 +33,14 @@ impl Default for MusicHandle {
 
 impl MusicHandle {
     pub fn new() -> Self {
+        let output_stream = OutputStreamBuilder::open_default_stream().unwrap();
+        let mixer = output_stream.mixer().clone();
+        let sink = Sink::connect_new(&mixer);
+        
         Self {
-            music_output: Arc::new(OutputStream::try_default().unwrap()),
-            sink: Arc::new(Sink::new_idle().0), // more efficient way, shouldnt have to do twice?
+            music_output: Arc::new(output_stream),
+            mixer: Arc::new(mixer),
+            sink: Arc::new(sink),
             song_length: 0,
             time_played: Arc::new(Mutex::new(0)),
             currently_playing: "CURRENT SONG".to_string(),
@@ -77,7 +85,7 @@ impl MusicHandle {
         self.update_song_length(episode);
 
         // reinitialize due to rodio crate
-        self.sink = Arc::new(Sink::try_new(&self.music_output.1).unwrap());
+        self.sink = Arc::new(Sink::connect_new(&self.mixer));
 
         // clone sink for thread
         let sclone = self.sink.clone();

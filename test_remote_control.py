@@ -41,9 +41,11 @@ class FirewoodPlayerListener(ServiceListener):
         info = zeroconf.get_service_info(type, name)
         if info:
             with self.lock:
-                address = f"http://{info.parsed_addresses()[0]}:{info.port}"
+                host = info.parsed_addresses()[0]
+                address = f"http://{host}:{info.port}"
                 self.players[name] = {
                     'address': address,
+                    'host': host,
                     'port': info.port,
                     'properties': {k.decode(): v.decode() for k, v in info.properties.items()}
                 }
@@ -228,6 +230,7 @@ def interactive_control(controller):
     print("  vol [0-100]  - Set volume (e.g., 'vol 75')")
     print("  play         - Play test episode")
     print("  play-url     - Play episode from URL")
+    print("  beam [URL]   - Beam audio file URL directly to player")
     print("  info         - Show player information")
     print("  monitor      - Live status monitoring")
     print("  q/quit       - Quit")
@@ -302,6 +305,23 @@ def interactive_control(controller):
                 }
                 result = controller.play_episode(episode)
                 print(f"🎵 Playing '{episode_title}'" if result and result.get('success') else "❌ Failed to play episode")
+            elif command.startswith('beam '):
+                # Extract URL from command
+                url_part = command[5:].strip()
+                if not url_part:
+                    print("❌ Usage: beam [URL]")
+                    continue
+                
+                # Beam the URL directly
+                episode = {
+                    "episode_url": url_part,
+                    "episode_title": "Beamed Audio",
+                    "podcast_name": "Direct URL",
+                    "episode_duration": 3600,  # Default 1 hour
+                    "episode_artwork": None
+                }
+                result = controller.play_episode(episode)
+                print(f"🎵 Beaming audio from: {url_part}" if result and result.get('success') else "❌ Failed to beam audio")
             elif command == 'info':
                 info = controller.get_player_info()
                 if info and info.get('success'):
@@ -349,6 +369,8 @@ def main():
                        help='Show all discovered players without connecting')
     parser.add_argument('--json', action='store_true',
                        help='Output discovery results in JSON format')
+    parser.add_argument('--beam-url', 
+                       help='URL to beam directly to player (combine with -u or --discover)')
     
     args = parser.parse_args()
     
@@ -414,6 +436,23 @@ def main():
             
             # Show initial status
             print_status(controller)
+            
+            # Handle URL beaming if specified
+            if args.beam_url:
+                episode = {
+                    "episode_id": 999999,  # Fake ID for beamed content
+                    "episode_url": args.beam_url,
+                    "episode_title": "Beamed Audio",
+                    "podcast_name": "Direct URL",
+                    "episode_duration": None,  # Let server parse duration
+                    "episode_artwork": "https://changelog.com/images/brand/changelog-icon.png",
+                    "start_position": 0
+                }
+                result = controller.play_episode(episode)
+                if result and result.get('success'):
+                    print(f"🎵 Successfully beamed: {args.beam_url}")
+                else:
+                    print(f"❌ Failed to beam: {args.beam_url}")
             
             if args.interactive:
                 interactive_control(controller)

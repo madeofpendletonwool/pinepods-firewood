@@ -144,20 +144,44 @@ pub struct QueueItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadItem {
-    #[serde(rename = "DownloadID")]
-    pub download_id: i64,
-    #[serde(rename = "EpisodeID")]
-    pub episode_id: i64,
-    #[serde(rename = "EpisodeTitle")]
-    pub episode_title: String,
-    #[serde(rename = "PodcastName")]
+    #[serde(rename = "podcastid")]
+    pub podcast_id: i64,
+    #[serde(rename = "podcastname")]
     pub podcast_name: String,
-    #[serde(rename = "DownloadedLocation")]
+    #[serde(rename = "artworkurl")]
+    pub artwork_url: String,
+    #[serde(rename = "episodeid")]
+    pub episode_id: i64,
+    #[serde(rename = "episodetitle")]
+    pub episode_title: String,
+    #[serde(rename = "episodepubdate")]
+    pub episode_pub_date: String,
+    #[serde(rename = "episodedescription")]
+    pub episode_description: String,
+    #[serde(rename = "episodeartwork")]
+    pub episode_artwork: String,
+    #[serde(rename = "episodeurl")]
+    pub episode_url: String,
+    #[serde(rename = "episodeduration")]
+    pub episode_duration: i64,
+    #[serde(rename = "podcastindexid")]
+    pub podcast_index_id: Option<i64>,
+    #[serde(rename = "websiteurl")]
+    pub website_url: Option<String>,
+    #[serde(rename = "downloadedlocation")]
     pub downloaded_location: String,
-    #[serde(rename = "DownloadStatus")]
-    pub download_status: String,
-    #[serde(rename = "DownloadProgress")]
-    pub download_progress: Option<f32>,
+    #[serde(rename = "listenduration")]
+    pub listen_duration: Option<i64>,
+    #[serde(rename = "completed")]
+    pub completed: bool,
+    #[serde(rename = "saved")]
+    pub saved: bool,
+    #[serde(rename = "queued")]
+    pub queued: bool,
+    #[serde(rename = "downloaded")]
+    pub downloaded: bool,
+    #[serde(rename = "is_youtube")]
+    pub is_youtube: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,12 +274,12 @@ pub struct QueueResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct SavedEpisodesResponse {
-    pub episodes: Vec<Episode>,
+    pub saved_episodes: Vec<Episode>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct DownloadsResponse {
-    pub downloads: Vec<DownloadItem>,
+    pub downloaded_episodes: Vec<DownloadItem>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -279,4 +303,90 @@ pub struct ApiResponse<T> {
 pub struct SimpleResponse {
     pub success: bool,
     pub message: Option<String>,
+}
+
+// Search result item that matches the API response
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchResultItem {
+    #[serde(rename = "artworkurl")]
+    pub artwork_url: String,
+    #[serde(rename = "author")]
+    pub author: String,
+    #[serde(rename = "categories")]
+    pub categories: serde_json::Value,
+    #[serde(rename = "completed")]
+    pub completed: bool,
+    #[serde(rename = "description")]
+    pub description: String,
+    #[serde(rename = "downloaded")]
+    pub downloaded: bool,
+    #[serde(rename = "episodeartwork")]
+    pub episode_artwork: String,
+    #[serde(rename = "episodecount")]
+    pub episode_count: u32,
+    #[serde(rename = "episodedescription")]
+    pub episode_description: String,
+    #[serde(rename = "episodeduration")]
+    pub episode_duration: i64,
+    #[serde(rename = "episodeid")]
+    pub episode_id: i64,
+    #[serde(rename = "episodepubdate")]
+    pub episode_pub_date: String,
+    #[serde(rename = "episodetitle")]
+    pub episode_title: String,
+    #[serde(rename = "episodeurl")]
+    pub episode_url: String,
+    #[serde(rename = "explicit")]
+    pub explicit: u8,
+    #[serde(rename = "feedurl")]
+    pub feed_url: String,
+    #[serde(rename = "is_youtube")]
+    pub is_youtube: bool,
+    #[serde(rename = "listenduration")]
+    pub listen_duration: i64,
+    #[serde(rename = "podcastid")]
+    pub podcast_id: i64,
+    #[serde(rename = "podcastname")]
+    pub podcast_name: String,
+    #[serde(rename = "queued")]
+    pub queued: bool,
+    #[serde(rename = "saved")]
+    pub saved: bool,
+    #[serde(rename = "userid")]
+    pub user_id: i64,
+    #[serde(rename = "websiteurl")]
+    pub website_url: String,
+}
+
+impl From<SearchResultItem> for Episode {
+    fn from(item: SearchResultItem) -> Self {
+        Episode {
+            episode_id: Some(item.episode_id),
+            podcast_id: Some(item.podcast_id),
+            podcast_name: Some(item.podcast_name),
+            episode_title: item.episode_title,
+            episode_pub_date: item.episode_pub_date,
+            episode_description: item.episode_description,
+            episode_artwork: item.episode_artwork,
+            episode_url: item.episode_url,
+            episode_duration: item.episode_duration,
+            listen_duration: Some(item.listen_duration),
+            completed: Some(item.completed),
+            saved: Some(item.saved),
+            queued: Some(item.queued),
+            downloaded: Some(item.downloaded),
+            is_youtube: Some(item.is_youtube),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SearchResponse {
+    pub data: Vec<SearchResultItem>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchRequest {
+    pub search_term: String,
+    pub user_id: i64,
 }
