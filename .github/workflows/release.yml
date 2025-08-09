@@ -30,16 +30,16 @@ jobs:
             name: linux-amd64
             
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             name: linux-arm64
             
           # macOS targets
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13  # Intel runner
             name: macos-amd64
             
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-latest  # Apple Silicon runner
             name: macos-arm64
             
           # Windows targets
@@ -65,13 +65,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libssl-dev
-          
-      - name: Install cross-compilation dependencies
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get install -y gcc-aarch64-linux-gnu libasound2-dev:arm64
-          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
           
       - name: Setup macOS dependencies
         if: runner.os == 'macOS'
