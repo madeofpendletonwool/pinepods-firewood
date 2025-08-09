@@ -49,7 +49,7 @@ jobs:
           
       - name: Update Cargo.lock
         run: |
-          cargo update -p pinepods_firewood --precise ${{ steps.version.outputs.version }}
+          cargo check  # This will update Cargo.lock automatically
           
       - name: Commit version update
         run: |
