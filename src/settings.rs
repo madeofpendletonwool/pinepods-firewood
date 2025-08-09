@@ -17,6 +17,8 @@ pub struct AppSettings {
     pub remote_control: RemoteControlSettings,
     /// Audio settings
     pub audio: AudioSettings,
+    /// UI settings
+    pub ui: UiSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +38,12 @@ pub struct AudioSettings {
     pub selected_device: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiSettings {
+    /// Custom tab order - list of tab names in order
+    pub tab_order: Vec<String>,
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -45,6 +53,7 @@ impl Default for AppSettings {
             theme: ThemeSettings::default(),
             remote_control: RemoteControlSettings::default(),
             audio: AudioSettings::default(),
+            ui: UiSettings::default(),
         }
     }
 }
@@ -71,6 +80,24 @@ impl Default for AudioSettings {
     fn default() -> Self {
         Self {
             selected_device: None, // None means use system default
+        }
+    }
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            tab_order: vec![
+                "Home".to_string(),
+                "Player".to_string(),
+                "Feed".to_string(),
+                "Podcasts".to_string(),
+                "Queue".to_string(),
+                "Saved".to_string(),
+                "Downloads".to_string(),
+                "Search".to_string(),
+                "Settings".to_string(),
+            ],
         }
     }
 }
@@ -166,6 +193,15 @@ impl SettingsManager {
     pub fn theme_name(&self) -> &str {
         &self.settings.theme.theme_name
     }
+
+    pub fn tab_order(&self) -> &Vec<String> {
+        &self.settings.ui.tab_order
+    }
+
+    pub fn set_tab_order(&mut self, tab_order: Vec<String>) -> Result<()> {
+        self.settings.ui.tab_order = tab_order;
+        self.save()
+    }
 }
 
 // Audio device enumeration utilities
@@ -177,22 +213,90 @@ pub fn get_available_audio_devices() -> Vec<(String, String)> {
     // Add default device option
     devices.push(("default".to_string(), "System Default".to_string()));
     
-    // Try to enumerate devices
-    let host = rodio::cpal::default_host();
+    // Redirect stderr to our log file during audio device enumeration
+    // This way ALSA debug messages go to the log file instead of bleeding into TUI
+    let log_file_path = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("pinepods")
+        .join("logs")
+        .join("pinepods.log");
     
-    // Get output devices
-    if let Ok(device_iter) = host.output_devices() {
-        for device in device_iter {
-            if let Ok(name) = device.name() {
-                let display_name = if name.len() > 40 {
-                    format!("{}...", &name[..37])
-                } else {
-                    name.clone()
-                };
-                devices.push((name, display_name));
+    let _stderr_redirect = RedirectStderrToLog::new(&log_file_path);
+    
+    match std::panic::catch_unwind(|| {
+        let host = rodio::cpal::default_host();
+        let mut found_devices = Vec::new();
+        
+        // Log that we're enumerating audio devices
+        log::debug!("Enumerating audio devices...");
+        
+        // Get output devices
+        if let Ok(device_iter) = host.output_devices() {
+            for device in device_iter {
+                if let Ok(name) = device.name() {
+                    let display_name = if name.len() > 40 {
+                        format!("{}...", &name[..37])
+                    } else {
+                        name.clone()
+                    };
+                    found_devices.push((name.clone(), display_name));
+                    log::debug!("Found audio device: {}", name);
+                }
             }
+        }
+        
+        log::debug!("Audio device enumeration completed, found {} devices", found_devices.len());
+        found_devices
+    }) {
+        Ok(found_devices) => devices.extend(found_devices),
+        Err(_) => {
+            log::warn!("Audio device enumeration panicked, using default only");
         }
     }
     
     devices
+}
+
+// Helper to redirect stderr to log file during audio operations
+struct RedirectStderrToLog {
+    original_stderr: Option<std::fs::File>,
+}
+
+impl RedirectStderrToLog {
+    fn new(log_file: &std::path::Path) -> Self {
+        use std::os::unix::io::{AsRawFd, FromRawFd};
+        
+        unsafe {
+            // Save original stderr
+            let original_stderr_fd = libc::dup(2);
+            let original_stderr = if original_stderr_fd >= 0 {
+                Some(std::fs::File::from_raw_fd(original_stderr_fd))
+            } else {
+                None
+            };
+            
+            // Open log file for appending
+            if let Ok(log_file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(log_file) {
+                // Redirect stderr to log file
+                libc::dup2(log_file.as_raw_fd(), 2);
+            }
+            
+            RedirectStderrToLog { original_stderr }
+        }
+    }
+}
+
+impl Drop for RedirectStderrToLog {
+    fn drop(&mut self) {
+        if let Some(original_stderr) = self.original_stderr.take() {
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                // Restore original stderr
+                libc::dup2(original_stderr.as_raw_fd(), 2);
+            }
+        }
+    }
 }

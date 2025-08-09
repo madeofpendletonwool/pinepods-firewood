@@ -19,9 +19,9 @@ use super::pages::*;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppTab {
     Home = 0,
-    Podcasts = 1,
+    Player = 1,
     Episodes = 2,
-    Player = 3,
+    Podcasts = 3,
     Queue = 4,
     Saved = 5,
     Downloads = 6,
@@ -33,9 +33,9 @@ impl AppTab {
     pub fn from_index(index: usize) -> Self {
         match index {
             0 => Self::Home,
-            1 => Self::Podcasts,
+            1 => Self::Player,
             2 => Self::Episodes,
-            3 => Self::Player,
+            3 => Self::Podcasts,
             4 => Self::Queue,
             5 => Self::Saved,
             6 => Self::Downloads,
@@ -49,7 +49,7 @@ impl AppTab {
         match self {
             Self::Home => "Home",
             Self::Podcasts => "Podcasts",
-            Self::Episodes => "Episodes",
+            Self::Episodes => "Feed",
             Self::Player => "Player",
             Self::Queue => "Queue",
             Self::Saved => "Saved",
@@ -75,10 +75,10 @@ impl AppTab {
 
     pub fn next(self) -> Self {
         match self {
-            Self::Home => Self::Podcasts,
-            Self::Podcasts => Self::Episodes,
-            Self::Episodes => Self::Player,
-            Self::Player => Self::Queue,
+            Self::Home => Self::Player,
+            Self::Player => Self::Episodes,
+            Self::Episodes => Self::Podcasts,
+            Self::Podcasts => Self::Queue,
             Self::Queue => Self::Saved,
             Self::Saved => Self::Downloads,
             Self::Downloads => Self::Search,
@@ -90,15 +90,65 @@ impl AppTab {
     pub fn previous(self) -> Self {
         match self {
             Self::Home => Self::Settings,
-            Self::Podcasts => Self::Home,
-            Self::Episodes => Self::Podcasts,
-            Self::Player => Self::Episodes,
-            Self::Queue => Self::Player,
+            Self::Player => Self::Home,
+            Self::Episodes => Self::Player,
+            Self::Podcasts => Self::Episodes,
+            Self::Queue => Self::Podcasts,
             Self::Saved => Self::Queue,
             Self::Downloads => Self::Saved,
             Self::Search => Self::Downloads,
             Self::Settings => Self::Search,
         }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "Home" => Some(Self::Home),
+            "Player" => Some(Self::Player),
+            "Feed" => Some(Self::Episodes),
+            "Podcasts" => Some(Self::Podcasts),
+            "Queue" => Some(Self::Queue),
+            "Saved" => Some(Self::Saved),
+            "Downloads" => Some(Self::Downloads),
+            "Search" => Some(Self::Search),
+            "Settings" => Some(Self::Settings),
+            _ => None,
+        }
+    }
+
+    pub fn all_tabs() -> Vec<Self> {
+        vec![
+            Self::Home,
+            Self::Player,
+            Self::Episodes,
+            Self::Podcasts,
+            Self::Queue,
+            Self::Saved,
+            Self::Downloads,
+            Self::Search,
+            Self::Settings,
+        ]
+    }
+    
+    pub fn ordered_tabs(settings_manager: &crate::settings::SettingsManager) -> Vec<Self> {
+        let tab_order = settings_manager.tab_order();
+        let mut ordered = Vec::new();
+        
+        // Add tabs according to user's preferred order
+        for tab_name in tab_order {
+            if let Some(tab) = Self::from_name(tab_name) {
+                ordered.push(tab);
+            }
+        }
+        
+        // Add any missing tabs (in case settings are incomplete)
+        for tab in Self::all_tabs() {
+            if !ordered.contains(&tab) {
+                ordered.push(tab);
+            }
+        }
+        
+        ordered
     }
 }
 
@@ -135,6 +185,9 @@ pub struct TuiApp {
     // Theme management
     theme_manager: ThemeManager,
     
+    // Settings management
+    settings_manager: SettingsManager,
+    
     // Animation
     animation_frame: usize,
     last_animation_update: Instant,
@@ -167,6 +220,10 @@ impl TuiApp {
         let mut podcasts_page = PodcastsPage::new(client.clone());
         podcasts_page.set_audio_player(audio_player.clone());
         
+        // Create settings page and set session info
+        let mut settings_page = SettingsPage::new(client.clone());
+        settings_page.set_session_info(session_info.clone());
+        
         Ok(Self {
             client: client.clone(),
             session_info,
@@ -183,7 +240,7 @@ impl TuiApp {
             saved_page: SavedPage::new(client.clone()),
             downloads_page: DownloadsPage::new(client.clone()),
             search_page: SearchPage::new(client.clone()),
-            settings_page: SettingsPage::new(client.clone()),
+            settings_page,
             
             loading: false,
             error_message: None,
@@ -193,6 +250,7 @@ impl TuiApp {
             tab_scroll_offset: 0,
             
             theme_manager,
+            settings_manager,
             
             animation_frame: 0,
             last_animation_update: Instant::now(),
@@ -296,6 +354,14 @@ impl TuiApp {
                     self.downloads_page.update_theme(&current_theme);
                     self.search_page.update_theme(&current_theme);
                 }
+                // Check if tab order changed and sync it
+                let current_tab_order = self.settings_page.settings_manager().tab_order().clone();
+                if current_tab_order != self.settings_manager.tab_order().clone() {
+                    // Reload settings to get updated tab order
+                    if let Ok(updated_settings) = crate::settings::SettingsManager::new() {
+                        self.settings_manager = updated_settings;
+                    }
+                }
             },
         }
 
@@ -391,17 +457,7 @@ impl TuiApp {
 
     fn render_header(&mut self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let all_tabs = [
-            AppTab::Home,
-            AppTab::Podcasts,
-            AppTab::Episodes,
-            AppTab::Player,
-            AppTab::Queue,
-            AppTab::Saved,
-            AppTab::Downloads,
-            AppTab::Search,
-            AppTab::Settings,
-        ];
+        let all_tabs = AppTab::ordered_tabs(&self.settings_manager);
 
         // Calculate how many tabs can fit based on terminal width
         let available_width = area.width.saturating_sub(2) as usize; // Account for borders only

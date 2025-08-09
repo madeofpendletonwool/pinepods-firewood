@@ -544,7 +544,7 @@ impl AudioPlayer {
                         log::debug!("Position update skipped - playback state: {:?}", state_guard.playback_state);
                     }
                 } else {
-                    log::debug!("Position update skipped - no sink");
+                    
                 }
             }
         }

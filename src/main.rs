@@ -10,6 +10,7 @@ use ratatui::{
 use std::{
     io,
     time::{Duration, Instant},
+    fs,
 };
 
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
@@ -17,10 +18,53 @@ use pinepods_firewood::tui::TuiApp;
 use pinepods_firewood::remote::RemoteControlServer;
 use pinepods_firewood::config::{get_preferred_remote_port, is_remote_control_enabled};
 
+pub fn get_log_file_path() -> std::path::PathBuf {
+    let app_data_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("pinepods");
+    app_data_dir.join("logs").join("pinepods.log")
+}
+
+fn setup_logging() -> Result<std::path::PathBuf> {
+    // Get log file path
+    let log_file = get_log_file_path();
+    
+    // Create logs directory if it doesn't exist
+    if let Some(logs_dir) = log_file.parent() {
+        fs::create_dir_all(logs_dir)?;
+    }
+    
+    // Set up fern logger
+    fern::Dispatch::new()
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "{}[{}][{}] {}",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
+                record.target(),
+                record.level(),
+                message
+            ))
+        })
+        .level(log::LevelFilter::Info)
+        .level_for("pinepods_firewood", log::LevelFilter::Debug)
+        .chain(
+            fern::Dispatch::new()
+                .chain(std::fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .append(true)
+                    .open(&log_file)?)
+        )
+        .apply()?;
+        
+    log::info!("Logging initialized, writing to: {}", log_file.display());
+    Ok(log_file)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    env_logger::init();
+    // Initialize file-based logging
+    let _log_file = setup_logging()?;
 
     // Set up panic hook to capture panic messages
     std::panic::set_hook(Box::new(|panic_info| {

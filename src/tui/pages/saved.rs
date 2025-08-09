@@ -7,11 +7,91 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use crate::api::{PinepodsClient, Episode};
 use crate::audio::AudioPlayer;
 use crate::theme::ThemeManager;
+
+#[derive(Debug, Clone)]
+struct ScrollState {
+    offset: usize,
+    direction: ScrollDirection,
+    pause_until: Instant,
+    text_width: usize,
+    display_width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ScrollDirection {
+    Right,
+    Left,
+    Paused,
+}
+
+impl ScrollState {
+    fn new(text_width: usize, display_width: usize) -> Self {
+        Self {
+            offset: 0,
+            direction: ScrollDirection::Paused,
+            pause_until: Instant::now() + Duration::from_millis(1000), // Initial pause
+            text_width,
+            display_width,
+        }
+    }
+    
+    fn update(&mut self, now: Instant) -> bool {
+        // If text fits in display width, no scrolling needed
+        if self.text_width <= self.display_width {
+            return false;
+        }
+        
+        // Check if we're in a pause period
+        if now < self.pause_until {
+            return false;
+        }
+        
+        match self.direction {
+            ScrollDirection::Paused => {
+                self.direction = ScrollDirection::Right;
+                true
+            }
+            ScrollDirection::Right => {
+                self.offset += 1;
+                if self.offset >= self.text_width - self.display_width + 3 {
+                    self.direction = ScrollDirection::Left;
+                    self.pause_until = now + Duration::from_millis(1500); // Pause at end
+                }
+                true
+            }
+            ScrollDirection::Left => {
+                if self.offset > 0 {
+                    self.offset -= 1;
+                } else {
+                    self.direction = ScrollDirection::Paused;
+                    self.pause_until = now + Duration::from_millis(2000); // Pause at beginning
+                }
+                true
+            }
+        }
+    }
+    
+    fn get_display_text(&self, text: &str) -> String {
+        if self.text_width <= self.display_width {
+            return text.to_string();
+        }
+        
+        let chars: Vec<char> = text.chars().collect();
+        let end_pos = (self.offset + self.display_width).min(chars.len());
+        
+        if self.offset < chars.len() {
+            chars[self.offset..end_pos].iter().collect()
+        } else {
+            String::new()
+        }
+    }
+}
 
 pub struct SavedPage {
     client: PinepodsClient,
@@ -26,6 +106,10 @@ pub struct SavedPage {
     
     // Animation
     last_update: Instant,
+    
+    // Title scrolling animation
+    scroll_states: HashMap<String, ScrollState>,
+    last_scroll_update: Instant,
     
     // Audio player
     audio_player: Option<AudioPlayer>,
@@ -46,6 +130,8 @@ impl SavedPage {
             loading: false,
             error_message: None,
             last_update: Instant::now(),
+            scroll_states: HashMap::new(),
+            last_scroll_update: Instant::now(),
             audio_player: None,
             theme_manager: ThemeManager::new(),
         }
@@ -172,7 +258,46 @@ impl SavedPage {
 
     pub async fn update(&mut self) -> Result<()> {
         self.last_update = Instant::now();
+        
+        // Update scrolling animation every 150ms
+        let now = Instant::now();
+        if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
+            self.update_scroll_states(now);
+            self.last_scroll_update = now;
+        }
+        
         Ok(())
+    }
+    
+    fn update_scroll_states(&mut self, now: Instant) {
+        // Update all scroll states
+        for scroll_state in self.scroll_states.values_mut() {
+            scroll_state.update(now);
+        }
+    }
+    
+    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+        let text_width = text.chars().count();
+        
+        self.scroll_states.entry(key).or_insert_with(|| {
+            ScrollState::new(text_width, display_width)
+        })
+    }
+    
+    fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
+        let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
+        
+        // Update scroll state dimensions if text OR display width changed
+        let text_width = text.chars().count();
+        if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
+            scroll_state.text_width = text_width;
+            scroll_state.display_width = display_width;
+            scroll_state.offset = 0;
+            scroll_state.direction = ScrollDirection::Paused;
+            scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
+        }
+        
+        scroll_state.get_display_text(text)
     }
     
     // Method to update theme from external source (like server sync)
@@ -202,8 +327,8 @@ impl SavedPage {
     }
 
     fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
         if self.saved_episodes.is_empty() && !self.loading {
+            let theme_colors = self.theme_manager.get_colors();
             let empty_msg = "No saved episodes found.\nPress 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
@@ -220,12 +345,49 @@ impl SavedPage {
             return;
         }
 
+        // Pre-calculate scrolled titles to avoid borrowing issues
+        let mut scrolled_titles = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let episode_data: Vec<(usize, String, String, Option<i64>)> = self.saved_episodes
+            .iter()
+            .enumerate()
+            .map(|(index, episode)| {
+                let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast").to_string();
+                let title = episode.episode_title.clone();
+                let episode_id = episode.episode_id;
+                (index, podcast_name, title, episode_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, podcast_name, title, episode_id) in episode_data {
+            // Calculate available width for title (approximate)
+            let podcast_width = podcast_name.chars().count();
+            let status_width = 15; // Approximate width for status indicators
+            let other_chars = 10; // " • " and padding
+            let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
+            
+            // Use scrolling for long titles
+            let scroll_key = format!("saved_{}_{}", index, episode_id.unwrap_or(0));
+            let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
+            scrolled_titles.push(displayed_title);
+        }
+
+        // Get theme colors after mutable operations
+        let theme_colors = self.theme_manager.get_colors();
+
         let items: Vec<ListItem> = self.saved_episodes
             .iter()
-            .map(|episode| {
+            .enumerate()
+            .map(|(index, episode)| {
                 let duration = format_duration(episode.episode_duration);
                 let pub_date = format_pub_date(&episode.episode_pub_date);
                 let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast");
+                
+                // Get pre-calculated scrolled title
+                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| episode.episode_title.clone());
                 
                 // Status indicators
                 let mut indicators = Vec::new();
@@ -245,7 +407,7 @@ impl SavedPage {
                 let status = format!(" {}", indicators.join(" "));
 
                 let line1 = Line::from(vec![
-                    Span::styled(&episode.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 

@@ -205,10 +205,11 @@ impl PinepodsClient {
         self.authenticated_post("/api/data/download_podcast", &request).await
     }
 
-    pub async fn delete_download(&self, download_id: i64) -> Result<SimpleResponse> {
+    pub async fn delete_download(&self, episode_id: i64, is_youtube: bool) -> Result<SimpleResponse> {
         let request = DeleteDownloadRequest {
-            episode_id: download_id,
+            episode_id,
             user_id: self.user_id() as i64,
+            is_youtube,
         };
         self.authenticated_post("/api/data/delete_episode", &request).await
     }
