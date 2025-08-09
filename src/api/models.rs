@@ -252,6 +252,7 @@ pub struct DownloadEpisodeRequest {
 pub struct DeleteDownloadRequest {
     pub episode_id: i64,
     pub user_id: i64,
+    pub is_youtube: bool,
 }
 
 #[derive(Debug, Serialize)]

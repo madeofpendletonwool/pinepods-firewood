@@ -127,6 +127,40 @@ impl PinepodsClient {
         self.reorder_queue_full(episode_ids).await
     }
 
+    /// Move episode up one position in queue
+    pub async fn move_up_one_position(&self, episode_id: i64) -> Result<SimpleResponse> {
+        let mut queue = self.get_queue().await?;
+        queue.sort_by_key(|item| item.queue_position);
+        
+        // Find the episode and move it up one position
+        if let Some(pos) = queue.iter().position(|item| item.episode_id == episode_id) {
+            if pos > 0 {
+                let episode = queue.remove(pos);
+                queue.insert(pos - 1, episode); // Move up one position
+            }
+        }
+        
+        let episode_ids: Vec<i64> = queue.iter().map(|item| item.episode_id).collect();
+        self.reorder_queue_full(episode_ids).await
+    }
+
+    /// Move episode down one position in queue
+    pub async fn move_down_one_position(&self, episode_id: i64) -> Result<SimpleResponse> {
+        let mut queue = self.get_queue().await?;
+        queue.sort_by_key(|item| item.queue_position);
+        
+        // Find the episode and move it down one position
+        if let Some(pos) = queue.iter().position(|item| item.episode_id == episode_id) {
+            if pos < queue.len() - 1 {
+                let episode = queue.remove(pos);
+                queue.insert(pos + 1, episode); // Move down one position
+            }
+        }
+        
+        let episode_ids: Vec<i64> = queue.iter().map(|item| item.episode_id).collect();
+        self.reorder_queue_full(episode_ids).await
+    }
+
     /// Shuffle queue
     pub async fn shuffle_queue(&self) -> Result<SimpleResponse> {
         let endpoint = format!("/api/data/shuffle_queue/{}", self.user_id());

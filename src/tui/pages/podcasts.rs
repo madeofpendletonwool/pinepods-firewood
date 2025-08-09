@@ -7,12 +7,92 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use crate::api::{PinepodsClient, Podcast, PodcastEpisode, Episode};
 use crate::audio::AudioPlayer;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
+
+#[derive(Debug, Clone)]
+struct ScrollState {
+    offset: usize,
+    direction: ScrollDirection,
+    pause_until: Instant,
+    text_width: usize,
+    display_width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ScrollDirection {
+    Right,
+    Left,
+    Paused,
+}
+
+impl ScrollState {
+    fn new(text_width: usize, display_width: usize) -> Self {
+        Self {
+            offset: 0,
+            direction: ScrollDirection::Paused,
+            pause_until: Instant::now() + Duration::from_millis(1000), // Initial pause
+            text_width,
+            display_width,
+        }
+    }
+    
+    fn update(&mut self, now: Instant) -> bool {
+        // If text fits in display width, no scrolling needed
+        if self.text_width <= self.display_width {
+            return false;
+        }
+        
+        // Check if we're in a pause period
+        if now < self.pause_until {
+            return false;
+        }
+        
+        match self.direction {
+            ScrollDirection::Paused => {
+                self.direction = ScrollDirection::Right;
+                true
+            }
+            ScrollDirection::Right => {
+                self.offset += 1;
+                if self.offset >= self.text_width - self.display_width + 3 {
+                    self.direction = ScrollDirection::Left;
+                    self.pause_until = now + Duration::from_millis(1500); // Pause at end
+                }
+                true
+            }
+            ScrollDirection::Left => {
+                if self.offset > 0 {
+                    self.offset -= 1;
+                } else {
+                    self.direction = ScrollDirection::Paused;
+                    self.pause_until = now + Duration::from_millis(2000); // Pause at beginning
+                }
+                true
+            }
+        }
+    }
+    
+    fn get_display_text(&self, text: &str) -> String {
+        if self.text_width <= self.display_width {
+            return text.to_string();
+        }
+        
+        let chars: Vec<char> = text.chars().collect();
+        let end_pos = (self.offset + self.display_width).min(chars.len());
+        
+        if self.offset < chars.len() {
+            chars[self.offset..end_pos].iter().collect()
+        } else {
+            String::new()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FocusPanel {
@@ -38,6 +118,10 @@ pub struct PodcastsPage {
     
     // Animation
     last_update: Instant,
+    
+    // Title scrolling animation
+    scroll_states: HashMap<String, ScrollState>,
+    last_scroll_update: Instant,
     
     // Audio player
     audio_player: Option<AudioPlayer>,
@@ -71,6 +155,8 @@ impl PodcastsPage {
             error_message: None,
             selected_podcast_id: None,
             last_update: Instant::now(),
+            scroll_states: HashMap::new(),
+            last_scroll_update: Instant::now(),
             audio_player: None,
             settings_manager,
             theme_manager: ThemeManager::new(),
@@ -256,7 +342,46 @@ impl PodcastsPage {
 
     pub async fn update(&mut self) -> Result<()> {
         self.last_update = Instant::now();
+        
+        // Update scrolling animation every 150ms
+        let now = Instant::now();
+        if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
+            self.update_scroll_states(now);
+            self.last_scroll_update = now;
+        }
+        
         Ok(())
+    }
+    
+    fn update_scroll_states(&mut self, now: Instant) {
+        // Update all scroll states
+        for scroll_state in self.scroll_states.values_mut() {
+            scroll_state.update(now);
+        }
+    }
+    
+    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+        let text_width = text.chars().count();
+        
+        self.scroll_states.entry(key).or_insert_with(|| {
+            ScrollState::new(text_width, display_width)
+        })
+    }
+    
+    fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
+        let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
+        
+        // Update scroll state dimensions if text OR display width changed
+        let text_width = text.chars().count();
+        if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
+            scroll_state.text_width = text_width;
+            scroll_state.display_width = display_width;
+            scroll_state.offset = 0;
+            scroll_state.direction = ScrollDirection::Paused;
+            scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
+        }
+        
+        scroll_state.get_display_text(text)
     }
 
     // Method to update theme from external source (like server sync)
@@ -281,8 +406,8 @@ impl PodcastsPage {
     }
 
     fn render_podcasts_list(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
         if self.podcasts.is_empty() && !self.loading {
+            let theme_colors = self.theme_manager.get_colors();
             let empty_msg = "No podcasts found. Press 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
@@ -302,14 +427,49 @@ impl PodcastsPage {
             return;
         }
 
+        // Pre-calculate scrolled titles to avoid borrowing issues
+        let mut scrolled_titles = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let podcast_data: Vec<(usize, String, String, i64)> = self.podcasts
+            .iter()
+            .enumerate()
+            .map(|(index, podcast)| {
+                let name = podcast.podcastname.clone();
+                let author = podcast.author.clone();
+                let podcast_id = podcast.podcastid;
+                (index, name, author, podcast_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, name, author, podcast_id) in podcast_data {
+            // Use much more of the available width for podcast name
+            // The second line has author info, so the first line can use most of the width
+            let name_max_width = available_width.saturating_sub(8).max(30); // Just leave room for borders/padding
+            
+            // Use scrolling for long podcast names
+            let scroll_key = format!("podcast_{}_{}", index, podcast_id);
+            let displayed_name = self.get_scrolled_text(scroll_key, &name, name_max_width);
+            scrolled_titles.push(displayed_name);
+        }
+
+        // Get theme colors after mutable operations
+        let theme_colors = self.theme_manager.get_colors();
+
         let items: Vec<ListItem> = self.podcasts
             .iter()
-            .map(|podcast| {
+            .enumerate()
+            .map(|(index, podcast)| {
                 let episode_count = podcast.episodecount;
                 let author = &podcast.author;
                 
+                // Get pre-calculated scrolled title
+                let displayed_name = scrolled_titles.get(index).cloned().unwrap_or_else(|| podcast.podcastname.clone());
+                
                 let line1 = Line::from(vec![
-                    Span::styled(&podcast.podcastname, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_name, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]);
 
                 let line2 = Line::from(vec![
@@ -350,7 +510,6 @@ impl PodcastsPage {
     }
 
     fn render_episodes_list(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
         let title = if let Some(selected) = self.podcast_list_state.selected() {
             if let Some(podcast) = self.podcasts.get(selected) {
                 format!("📻 Episodes - {}", podcast.podcastname)
@@ -362,6 +521,7 @@ impl PodcastsPage {
         };
 
         if self.selected_podcast_episodes.is_empty() && !self.loading_episodes {
+            let theme_colors = self.theme_manager.get_colors();
             let empty_msg = if self.podcasts.is_empty() {
                 "Select a podcast to view episodes"
             } else {
@@ -386,11 +546,47 @@ impl PodcastsPage {
             return;
         }
 
+        // Pre-calculate scrolled titles to avoid borrowing issues
+        let mut scrolled_titles = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let episode_data: Vec<(usize, String, Option<i64>)> = self.selected_podcast_episodes
+            .iter()
+            .enumerate()
+            .map(|(index, episode)| {
+                let title = episode.episode_title.clone();
+                let episode_id = episode.episode_id;
+                (index, title, episode_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, title, episode_id) in episode_data {
+            // Use much more of the available width for episode title  
+            // Status indicators are on the same line, so we need to be a bit more conservative
+            // but still use most of the width
+            let status_width = 20; // Conservative estimate for status indicators
+            let title_max_width = available_width.saturating_sub(status_width + 6).max(40); // Leave room for status + padding
+            
+            // Use scrolling for long episode titles
+            let scroll_key = format!("episode_{}_{}", index, episode_id.unwrap_or(0));
+            let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
+            scrolled_titles.push(displayed_title);
+        }
+
+        // Get theme colors after mutable operations
+        let theme_colors = self.theme_manager.get_colors();
+
         let items: Vec<ListItem> = self.selected_podcast_episodes
             .iter()
-            .map(|episode| {
+            .enumerate()
+            .map(|(index, episode)| {
                 let duration = format_duration(episode.episode_duration);
                 let pub_date = format_pub_date(&episode.episode_pub_date);
+                
+                // Get pre-calculated scrolled title
+                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| episode.episode_title.clone());
                 
                 // Status indicators
                 let mut indicators = Vec::new();
@@ -416,7 +612,7 @@ impl PodcastsPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(&episode.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 

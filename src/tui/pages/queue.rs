@@ -9,9 +9,90 @@ use ratatui::{
     },
     Frame,
 };
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use crate::api::{PinepodsClient, QueueItem};
 use crate::theme::ThemeManager;
+
+#[derive(Debug, Clone)]
+struct ScrollState {
+    offset: usize,
+    direction: ScrollDirection,
+    pause_until: Instant,
+    text_width: usize,
+    display_width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ScrollDirection {
+    Right,
+    Left,
+    Paused,
+}
+
+impl ScrollState {
+    fn new(text_width: usize, display_width: usize) -> Self {
+        Self {
+            offset: 0,
+            direction: ScrollDirection::Paused,
+            pause_until: Instant::now() + Duration::from_millis(1000), // Initial pause
+            text_width,
+            display_width,
+        }
+    }
+    
+    fn update(&mut self, now: Instant) -> bool {
+        // If text fits in display width, no scrolling needed
+        if self.text_width <= self.display_width {
+            return false;
+        }
+        
+        // Check if we're in a pause period
+        if now < self.pause_until {
+            return false;
+        }
+        
+        match self.direction {
+            ScrollDirection::Paused => {
+                self.direction = ScrollDirection::Right;
+                true
+            }
+            ScrollDirection::Right => {
+                self.offset += 1;
+                if self.offset >= self.text_width - self.display_width + 3 {
+                    self.direction = ScrollDirection::Left;
+                    self.pause_until = now + Duration::from_millis(1500); // Pause at end
+                }
+                true
+            }
+            ScrollDirection::Left => {
+                if self.offset > 0 {
+                    self.offset -= 1;
+                } else {
+                    self.direction = ScrollDirection::Paused;
+                    self.pause_until = now + Duration::from_millis(2000); // Pause at beginning
+                }
+                true
+            }
+        }
+    }
+    
+    fn get_display_text(&self, text: &str) -> String {
+        if self.text_width <= self.display_width {
+            return text.to_string();
+        }
+        
+        let chars: Vec<char> = text.chars().collect();
+        let end_pos = (self.offset + self.display_width).min(chars.len());
+        
+        if self.offset < chars.len() {
+            chars[self.offset..end_pos].iter().collect()
+        } else {
+            String::new()
+        }
+    }
+}
 
 pub struct QueuePage {
     client: PinepodsClient,
@@ -28,6 +109,10 @@ pub struct QueuePage {
     // Actions
     show_actions: bool,
     selected_action: usize,
+    
+    // Title scrolling animation
+    scroll_states: HashMap<String, ScrollState>,
+    last_scroll_update: Instant,
     
     // Theme management
     theme_manager: ThemeManager,
@@ -47,6 +132,8 @@ impl QueuePage {
             error_message: None,
             show_actions: false,
             selected_action: 0,
+            scroll_states: HashMap::new(),
+            last_scroll_update: Instant::now(),
             theme_manager: ThemeManager::new(),
         }
     }
@@ -139,6 +226,16 @@ impl QueuePage {
                     self.move_to_bottom(item.episode_id).await?;
                 }
             }
+            KeyCode::Char('u') => {
+                if let Some(item) = self.queue_items.get(self.selected_item) {
+                    self.move_up_one_position(item.episode_id).await?;
+                }
+            }
+            KeyCode::Char('d') => {
+                if let Some(item) = self.queue_items.get(self.selected_item) {
+                    self.move_down_one_position(item.episode_id).await?;
+                }
+            }
             KeyCode::F(5) => {
                 self.refresh().await?;
             }
@@ -151,11 +248,11 @@ impl QueuePage {
     async fn handle_action_input(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                self.selected_action = (self.selected_action + 1) % 6;
+                self.selected_action = (self.selected_action + 1) % 8;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected_action == 0 {
-                    self.selected_action = 5;
+                    self.selected_action = 7;
                 } else {
                     self.selected_action -= 1;
                 }
@@ -181,6 +278,12 @@ impl QueuePage {
                         5 => { // Download
                             self.download_episode(item.episode_id).await?;
                         }
+                        6 => { // Move up one position
+                            self.move_up_one_position(item.episode_id).await?;
+                        }
+                        7 => { // Move down one position
+                            self.move_down_one_position(item.episode_id).await?;
+                        }
                         _ => {}
                     }
                 }
@@ -196,9 +299,47 @@ impl QueuePage {
     }
 
     pub async fn update(&mut self) -> Result<()> {
+        // Update scrolling animation every 150ms
+        let now = Instant::now();
+        if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
+            self.update_scroll_states(now);
+            self.last_scroll_update = now;
+        }
+        
         // Auto-refresh every minute
         // TODO: Implement auto-refresh logic
         Ok(())
+    }
+    
+    fn update_scroll_states(&mut self, now: Instant) {
+        // Update all scroll states
+        for scroll_state in self.scroll_states.values_mut() {
+            scroll_state.update(now);
+        }
+    }
+    
+    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+        let text_width = text.chars().count();
+        
+        self.scroll_states.entry(key).or_insert_with(|| {
+            ScrollState::new(text_width, display_width)
+        })
+    }
+    
+    fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
+        let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
+        
+        // Update scroll state dimensions if text OR display width changed
+        let text_width = text.chars().count();
+        if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
+            scroll_state.text_width = text_width;
+            scroll_state.display_width = display_width;
+            scroll_state.offset = 0;
+            scroll_state.direction = ScrollDirection::Paused;
+            scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
+        }
+        
+        scroll_state.get_display_text(text)
     }
     
     // Method to update theme from external source (like server sync)
@@ -271,6 +412,48 @@ impl QueuePage {
         Ok(())
     }
 
+    async fn move_up_one_position(&mut self, episode_id: i64) -> Result<()> {
+        // Check if we can move up (not at the top)
+        if let Some(current_selected) = self.list_state.selected() {
+            if current_selected > 0 {
+                match self.client.move_up_one_position(episode_id).await {
+                    Ok(_) => {
+                        self.refresh().await?;
+                        // Move cursor up to follow the episode that moved up
+                        let new_position = current_selected - 1;
+                        self.list_state.select(Some(new_position));
+                        self.selected_item = new_position;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to move up: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn move_down_one_position(&mut self, episode_id: i64) -> Result<()> {
+        // Check if we can move down (not at the bottom)
+        if let Some(current_selected) = self.list_state.selected() {
+            if current_selected < self.queue_items.len().saturating_sub(1) {
+                match self.client.move_down_one_position(episode_id).await {
+                    Ok(_) => {
+                        self.refresh().await?;
+                        // Move cursor down to follow the episode that moved down
+                        let new_position = current_selected + 1;
+                        self.list_state.select(Some(new_position));
+                        self.selected_item = new_position;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to move down: {}", e));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn save_episode(&mut self, episode_id: i64) -> Result<()> {
         let is_youtube = self.queue_items.iter()
             .find(|item| item.episode_id == episode_id)
@@ -337,11 +520,45 @@ impl QueuePage {
             return;
         }
 
+        // Pre-calculate scrolled titles to avoid borrowing issues
+        let mut scrolled_titles = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let item_data: Vec<(usize, String, String, i64)> = self.queue_items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| {
+                let podcast_name = item.podcast_name.clone();
+                let title = item.episode_title.clone();
+                let episode_id = item.episode_id;
+                (index, podcast_name, title, episode_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, podcast_name, title, episode_id) in item_data {
+            // Calculate available width for title (approximate)
+            let podcast_width = podcast_name.chars().count();
+            let status_width = 20; // Approximate width for status indicators
+            let other_chars = 10; // " • " and padding
+            let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
+            
+            // Use scrolling for long titles
+            let scroll_key = format!("queue_{}_{}", index, episode_id);
+            let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
+            scrolled_titles.push(displayed_title);
+        }
+
         let items: Vec<ListItem> = self.queue_items
             .iter()
-            .map(|item| {
+            .enumerate()
+            .map(|(index, item)| {
                 let duration = format_duration(item.episode_duration);
                 let pub_date = format_pub_date(&item.episode_pub_date);
+                
+                // Get pre-calculated scrolled title
+                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| item.episode_title.clone());
                 
                 // Status indicators
                 let mut indicators = Vec::new();
@@ -363,7 +580,7 @@ impl QueuePage {
 
                 let theme_colors = self.theme_manager.get_colors();
                 let line1 = Line::from(vec![
-                    Span::styled(&item.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
@@ -457,6 +674,12 @@ impl QueuePage {
                 Span::styled(" Move to top  ", Style::default().fg(theme_colors.text_secondary)),
                 Span::styled("b", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
                 Span::styled(" Move to bottom  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("u", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Move up one  ", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled("d", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(" Move down one", Style::default().fg(theme_colors.text_secondary)),
+            ]),
+            Line::from(vec![
                 Span::styled("F5", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
                 Span::styled(" Refresh", Style::default().fg(theme_colors.text_secondary)),
             ]),
@@ -505,6 +728,8 @@ impl QueuePage {
             "⬇️  Move to Bottom",
             "⭐ Save Episode",
             "📥 Download Episode",
+            "🔼 Move Up One",
+            "🔽 Move Down One",
         ];
 
         let items: Vec<ListItem> = actions

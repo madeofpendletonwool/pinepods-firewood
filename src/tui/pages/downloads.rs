@@ -8,12 +8,91 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::api::{PinepodsClient, DownloadItem};
 use crate::audio::AudioPlayer;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
+
+#[derive(Debug, Clone)]
+struct ScrollState {
+    offset: usize,
+    direction: ScrollDirection,
+    pause_until: Instant,
+    text_width: usize,
+    display_width: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum ScrollDirection {
+    Right,
+    Left,
+    Paused,
+}
+
+impl ScrollState {
+    fn new(text_width: usize, display_width: usize) -> Self {
+        Self {
+            offset: 0,
+            direction: ScrollDirection::Paused,
+            pause_until: Instant::now() + Duration::from_millis(1000), // Initial pause
+            text_width,
+            display_width,
+        }
+    }
+    
+    fn update(&mut self, now: Instant) -> bool {
+        // If text fits in display width, no scrolling needed
+        if self.text_width <= self.display_width {
+            return false;
+        }
+        
+        // Check if we're in a pause period
+        if now < self.pause_until {
+            return false;
+        }
+        
+        match self.direction {
+            ScrollDirection::Paused => {
+                self.direction = ScrollDirection::Right;
+                true
+            }
+            ScrollDirection::Right => {
+                self.offset += 1;
+                if self.offset >= self.text_width - self.display_width + 3 {
+                    self.direction = ScrollDirection::Left;
+                    self.pause_until = now + Duration::from_millis(1500); // Pause at end
+                }
+                true
+            }
+            ScrollDirection::Left => {
+                if self.offset > 0 {
+                    self.offset -= 1;
+                } else {
+                    self.direction = ScrollDirection::Paused;
+                    self.pause_until = now + Duration::from_millis(2000); // Pause at beginning
+                }
+                true
+            }
+        }
+    }
+    
+    fn get_display_text(&self, text: &str) -> String {
+        if self.text_width <= self.display_width {
+            return text.to_string();
+        }
+        
+        let chars: Vec<char> = text.chars().collect();
+        let end_pos = (self.offset + self.display_width).min(chars.len());
+        
+        if self.offset < chars.len() {
+            chars[self.offset..end_pos].iter().collect()
+        } else {
+            String::new()
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum FocusPanel {
@@ -40,6 +119,10 @@ pub struct DownloadsPage {
     
     // Animation
     last_update: Instant,
+    
+    // Title scrolling animation
+    scroll_states: HashMap<String, ScrollState>,
+    last_scroll_update: Instant,
     
     // Audio player
     audio_player: Option<AudioPlayer>,
@@ -82,6 +165,8 @@ impl DownloadsPage {
             error_message: None,
             selected_podcast_id: None,
             last_update: Instant::now(),
+            scroll_states: HashMap::new(),
+            last_scroll_update: Instant::now(),
             audio_player: None,
             settings_manager,
             theme_manager: ThemeManager::new(),
@@ -263,6 +348,16 @@ impl DownloadsPage {
             KeyCode::Char('r') => {
                 self.refresh().await?;
             }
+            KeyCode::Char('d') => {
+                if self.focused_panel == FocusPanel::Downloads {
+                    if let Some(selected) = self.download_list_state.selected() {
+                        if let Some(download) = self.selected_podcast_downloads.get(selected) {
+                            log::debug!("Delete key pressed for download: {} (id: {})", download.episode_title, download.episode_id);
+                            self.delete_download(download.episode_id, download.is_youtube).await?;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         
@@ -305,9 +400,64 @@ impl DownloadsPage {
         Ok(())
     }
 
+    async fn delete_download(&mut self, episode_id: i64, is_youtube: bool) -> Result<()> {
+        log::debug!("delete_download called with episode_id: {}, is_youtube: {}", episode_id, is_youtube);
+        match self.client.delete_download(episode_id, is_youtube).await {
+            Ok(_) => {
+                self.error_message = Some("🗑️ Episode download deleted successfully!".to_string());
+                // Refresh to update the UI
+                self.refresh().await?;
+            }
+            Err(e) => {
+                log::error!("Failed to delete download: {}", e);
+                self.error_message = Some(format!("❌ Failed to delete download: {}", e));
+            }
+        }
+        Ok(())
+    }
+
     pub async fn update(&mut self) -> Result<()> {
         self.last_update = Instant::now();
+        
+        // Update scrolling animation every 150ms
+        let now = Instant::now();
+        if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
+            self.update_scroll_states(now);
+            self.last_scroll_update = now;
+        }
+        
         Ok(())
+    }
+    
+    fn update_scroll_states(&mut self, now: Instant) {
+        // Update all scroll states
+        for scroll_state in self.scroll_states.values_mut() {
+            scroll_state.update(now);
+        }
+    }
+    
+    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+        let text_width = text.chars().count();
+        
+        self.scroll_states.entry(key).or_insert_with(|| {
+            ScrollState::new(text_width, display_width)
+        })
+    }
+    
+    fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
+        let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
+        
+        // Update scroll state dimensions if text OR display width changed
+        let text_width = text.chars().count();
+        if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
+            scroll_state.text_width = text_width;
+            scroll_state.display_width = display_width;
+            scroll_state.offset = 0;
+            scroll_state.direction = ScrollDirection::Paused;
+            scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
+        }
+        
+        scroll_state.get_display_text(text)
     }
     
     // Method to update theme from external source (like server sync)
@@ -317,23 +467,34 @@ impl DownloadsPage {
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect) {
         let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(5),         // Main content
+                Constraint::Length(3),      // Help/controls footer
+            ])
+            .split(area);
+
+        let content_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
                 Constraint::Percentage(40),  // Podcasts list
                 Constraint::Percentage(60),  // Downloads list
             ])
-            .split(area);
+            .split(main_layout[0]);
 
         // Render podcasts list
-        self.render_podcasts_list(frame, main_layout[0]);
+        self.render_podcasts_list(frame, content_layout[0]);
         
         // Render downloads list
-        self.render_downloads_list(frame, main_layout[1]);
+        self.render_downloads_list(frame, content_layout[1]);
+        
+        // Render help/controls footer
+        self.render_controls_footer(frame, main_layout[1]);
     }
 
     fn render_podcasts_list(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
         if self.podcasts_with_downloads.is_empty() && !self.loading {
+            let theme_colors = self.theme_manager.get_colors();
             let empty_msg = "No downloads found. Press 'r' to refresh.";
             let empty = Paragraph::new(empty_msg)
                 .alignment(Alignment::Center)
@@ -354,13 +515,46 @@ impl DownloadsPage {
             return;
         }
 
+        // Pre-calculate scrolled podcast names to avoid borrowing issues
+        let mut scrolled_names = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let podcast_data: Vec<(usize, String, i64)> = self.podcasts_with_downloads
+            .iter()
+            .enumerate()
+            .map(|(index, podcast)| {
+                (index, podcast.podcast_name.clone(), podcast.podcast_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, name, podcast_id) in podcast_data {
+            // Use most of the available width for podcast names, leaving room for download count
+            let name_max_width = available_width.saturating_sub(20).max(30);
+            
+            // Use scrolling for long podcast names
+            let scroll_key = format!("downloads_podcast_{}_{}", index, podcast_id);
+            let displayed_name = self.get_scrolled_text(scroll_key, &name, name_max_width);
+            scrolled_names.push(displayed_name);
+        }
+        
+        // Get theme colors after mutable operations
+        let theme_colors = self.theme_manager.get_colors();
+
         let items: Vec<ListItem> = self.podcasts_with_downloads
             .iter()
-            .map(|podcast| {
+            .enumerate()
+            .map(|(index, podcast)| {
                 let download_count = podcast.download_count;
                 
+                // Get pre-calculated scrolled name
+                let displayed_name = scrolled_names.get(index)
+                    .cloned()
+                    .unwrap_or_else(|| podcast.podcast_name.clone());
+                
                 let line1 = Line::from(vec![
-                    Span::styled(&podcast.podcast_name, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_name, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                 ]);
 
                 let line2 = Line::from(vec![
@@ -401,7 +595,6 @@ impl DownloadsPage {
     }
 
     fn render_downloads_list(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
         let title = if let Some(selected) = self.podcast_list_state.selected() {
             if let Some(podcast) = self.podcasts_with_downloads.get(selected) {
                 format!("📥 Downloads - {}", podcast.podcast_name)
@@ -413,6 +606,7 @@ impl DownloadsPage {
         };
 
         if self.selected_podcast_downloads.is_empty() && !self.loading_downloads {
+            let theme_colors = self.theme_manager.get_colors();
             let empty_msg = if self.podcasts_with_downloads.is_empty() {
                 "Select a podcast to view downloads"
             } else {
@@ -438,11 +632,44 @@ impl DownloadsPage {
             return;
         }
 
+        // Pre-calculate scrolled episode titles to avoid borrowing issues
+        let mut scrolled_titles = Vec::new();
+        let available_width = area.width as usize;
+        
+        // First collect the data we need to avoid borrowing conflicts
+        let download_data: Vec<(usize, String, i64)> = self.selected_podcast_downloads
+            .iter()
+            .enumerate()
+            .map(|(index, download)| {
+                (index, download.episode_title.clone(), download.episode_id)
+            })
+            .collect();
+        
+        // Now we can safely call mutable methods
+        for (index, title, episode_id) in download_data {
+            // Use most of the available width for episode titles, leaving room for status indicators
+            let title_max_width = available_width.saturating_sub(26).max(40);
+            
+            // Use scrolling for long episode titles
+            let scroll_key = format!("downloads_episode_{}_{}", index, episode_id);
+            let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
+            scrolled_titles.push(displayed_title);
+        }
+        
+        // Get theme colors after mutable operations
+        let theme_colors = self.theme_manager.get_colors();
+
         let items: Vec<ListItem> = self.selected_podcast_downloads
             .iter()
-            .map(|download| {
+            .enumerate()
+            .map(|(index, download)| {
                 let duration = format_duration(download.episode_duration);
                 let pub_date = format_pub_date(&download.episode_pub_date);
+                
+                // Get pre-calculated scrolled title
+                let displayed_title = scrolled_titles.get(index)
+                    .cloned()
+                    .unwrap_or_else(|| download.episode_title.clone());
                 
                 // Status indicators
                 let mut indicators = Vec::new();
@@ -462,7 +689,7 @@ impl DownloadsPage {
                 let status = format!(" {}", indicators.join(" "));
 
                 let line1 = Line::from(vec![
-                    Span::styled(&download.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
@@ -557,6 +784,48 @@ impl DownloadsPage {
                     .style(Style::default().bg(theme_colors.container))
             );
         frame.render_widget(loading, popup_area);
+    }
+
+    fn render_controls_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme_colors = self.theme_manager.get_colors();
+        let controls = vec![
+            ("↑↓/jk", "Navigate"),
+            ("←→/hl", "Switch panel"),
+            ("Tab", "Switch panel"),
+            ("Enter", "Play/Select"),
+            ("d", "Delete download"),
+            ("r", "Refresh"),
+        ];
+
+        let footer_text: Vec<Span> = controls
+            .iter()
+            .enumerate()
+            .flat_map(|(i, (key, desc))| {
+                let mut spans = vec![
+                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
+                ];
+                
+                if i < controls.len() - 1 {
+                    spans.push(Span::raw("  "));
+                }
+                
+                spans
+            })
+            .collect();
+
+        let footer = Paragraph::new(Line::from(footer_text))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(theme_colors.border))
+                    .title("🔧 Controls")
+                    .title_style(Style::default().fg(theme_colors.accent))
+            );
+
+        frame.render_widget(footer, area);
     }
 }
 
