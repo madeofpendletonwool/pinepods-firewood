@@ -224,6 +224,10 @@ impl TuiApp {
         let mut settings_page = SettingsPage::new(client.clone());
         settings_page.set_session_info(session_info.clone());
         
+        // Create home page and set up audio player
+        let mut home_page = HomePage::new(client.clone());
+        home_page.set_audio_player(audio_player.clone());
+        
         Ok(Self {
             client: client.clone(),
             session_info,
@@ -232,7 +236,7 @@ impl TuiApp {
             
             audio_player: audio_player.clone(),
             
-            home_page: HomePage::new(client.clone()),
+            home_page,
             podcasts_page,
             episodes_page,
             player_page: PlayerPage::new(audio_player),
@@ -586,7 +590,13 @@ impl TuiApp {
             let episode_info = ratatui::widgets::Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled("🎵 ", Style::default().fg(theme_colors.accent)),
-                    Span::styled(title_text, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(title_text.clone(), Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    // Show loading indicator in title area if loading
+                    if matches!(player_state.playback_state, crate::audio::PlaybackState::Loading) {
+                        Span::styled(" (Loading...)", Style::default().fg(theme_colors.warning).add_modifier(Modifier::ITALIC))
+                    } else {
+                        Span::raw("")
+                    },
                 ]),
                 Line::from(vec![
                     Span::styled("by ", Style::default().fg(theme_colors.text_secondary)),
@@ -625,7 +635,11 @@ impl TuiApp {
             let status_icon = match player_state.playback_state {
                 crate::audio::PlaybackState::Playing => "▶️",
                 crate::audio::PlaybackState::Paused => "⏸️",
-                crate::audio::PlaybackState::Loading => "🔄",
+                crate::audio::PlaybackState::Loading => {
+                    // Animated loading spinner
+                    let spinners = ["🔄", "🔃", "⟳", "⟲"];
+                    spinners[self.animation_frame % spinners.len()]
+                },
                 crate::audio::PlaybackState::Stopped => "⏹️",
                 crate::audio::PlaybackState::Error(_) => "❌",
             };

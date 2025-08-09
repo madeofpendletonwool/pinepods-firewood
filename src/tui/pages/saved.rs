@@ -213,7 +213,7 @@ impl SavedPage {
                 
                 if let Some(ref mut audio_player) = self.audio_player {
                     audio_player.play_episode(episode.clone())?;
-                    self.error_message = Some("🎵 Episode started! Switch to Player tab (4) to control playback".to_string());
+                    // No UI message needed - the player box will show loading state
                 } else {
                     log::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());

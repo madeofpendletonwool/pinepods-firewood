@@ -188,7 +188,7 @@ impl SearchPage {
                     // Convert SearchResultItem to Episode for the audio player
                     let episode = result.clone().into();
                     audio_player.play_episode(episode)?;
-                    self.success_message = Some("🎵 Episode started! Switch to Player tab (4) to control playback".to_string());
+                    // No UI message needed - the player box will show loading state
                 } else {
                     log::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());

@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
 use crate::api::{PinepodsClient, HomeOverview, Episode, Playlist};
+use crate::audio::AudioPlayer;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,9 @@ pub struct HomePage {
     
     // Animation
     last_update: Instant,
+    
+    // Audio player
+    audio_player: Option<AudioPlayer>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -163,7 +167,12 @@ impl HomePage {
             scroll_states: HashMap::new(),
             last_scroll_update: Instant::now(),
             last_update: Instant::now(),
+            audio_player: None,
         }
+    }
+
+    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+        self.audio_player = Some(audio_player);
     }
 
     pub async fn initialize(&mut self) -> Result<()> {
@@ -440,16 +449,23 @@ impl HomePage {
             if let Some(item) = section.items.get(self.selected_item) {
                 match item {
                     HomeItem::Episode(episode) => {
-                        // TODO: Play episode or show episode details
-                        println!("Playing episode: {}", episode.episode_title);
+                        log::info!("Playing episode from home: {}", episode.episode_title);
+                        
+                        if let Some(ref mut audio_player) = self.audio_player {
+                            audio_player.play_episode(episode.clone())?;
+                            // No UI message needed - the player box will show loading state
+                        } else {
+                            log::warn!("No audio player available");
+                            self.error_message = Some("Audio player not available".to_string());
+                        }
                     }
                     HomeItem::Playlist(playlist) => {
                         // TODO: Navigate to playlist
-                        println!("Opening playlist: {}", playlist.name);
+                        log::info!("Opening playlist: {}", playlist.name);
                     }
                     HomeItem::Action(title, _) => {
                         // TODO: Handle quick actions
-                        println!("Executing action: {}", title);
+                        log::info!("Executing action: {}", title);
                     }
                     HomeItem::Stat(_) => {
                         // Stats are not actionable
