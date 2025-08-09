@@ -30,33 +30,65 @@ A comprehensive TUI (Terminal User Interface) podcast client for PinePods that d
 
 ## 🚀 Installation
 
-### Prerequisites
-- Rust toolchain (1.70+)
-- ALSA development libraries (Linux)
+### 🎯 Quick Install (Recommended)
+
+**One-liner installer** (Linux/macOS/Windows):
+```bash
+curl -sSL https://raw.githubusercontent.com/madeofpendletonwool/pinepods-firewood/main/install.sh | bash
+```
+
+### 📦 Package Managers
+
+```bash
+# Homebrew (macOS/Linux)
+brew install pinepods-firewood
+
+# Cargo (Rust)
+cargo install pinepods-firewood
+
+# Arch Linux (AUR)
+yay -S pinepods-firewood
+
+# Ubuntu/Debian
+wget https://github.com/madeofpendletonwool/pinepods-firewood/releases/latest/download/pinepods-firewood_VERSION_amd64.deb
+sudo dpkg -i pinepods-firewood_*.deb
+```
+
+### 📥 Manual Downloads
+
+Download pre-built binaries from [GitHub Releases](https://github.com/madeofpendletonwool/pinepods-firewood/releases/latest):
+- **Linux**: `pinepods-firewood-linux-amd64.tar.gz`
+- **macOS**: `pinepods-firewood-macos-amd64.tar.gz` (Intel) / `pinepods-firewood-macos-arm64.tar.gz` (Apple Silicon)  
+- **Windows**: `pinepods-firewood-windows-amd64.zip`
+
+### 🔨 Build from Source
+
+**Prerequisites:**
+- Rust toolchain (1.75+)
+- System dependencies:
   ```bash
   # Ubuntu/Debian
-  sudo apt install libasound2-dev
+  sudo apt install pkg-config libasound2-dev libssl-dev
   
   # Fedora
-  sudo dnf install alsa-lib-devel
+  sudo dnf install pkg-config alsa-lib-devel openssl-devel
   
   # Arch Linux
-  sudo pacman -S alsa-lib
+  sudo pacman -S pkg-config alsa-lib openssl
+  
+  # macOS (with Homebrew)
+  brew install pkg-config
   ```
 
-### Build from Source
+**Build:**
 ```bash
 git clone https://github.com/madeofpendletonwool/pinepods-firewood.git
 cd pinepods-firewood
 cargo build --release
+sudo cp target/release/pinepods_firewood /usr/local/bin/
 ```
 
-### Run
-```bash
-cargo run
-# or
-./target/release/pinepods_firewood
-```
+📖 **[Complete Installation Guide](INSTALLATION.md)** - All methods, troubleshooting, and platform-specific instructions.
 
 ## 📱 Usage
 

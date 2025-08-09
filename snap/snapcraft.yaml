@@ -1,0 +1,42 @@
+name: pinepods-firewood
+base: core22
+version: '0.1.0'  # This will be updated by CI
+summary: Terminal UI client for PinePods podcast server
+description: |
+  A fast, lightweight TUI client for interacting with PinePods
+  podcast server instances. Built with Rust and Ratatui.
+  
+  Features:
+  - Browse and play podcast episodes
+  - Queue management
+  - Search functionality
+  - Remote control capabilities
+  - Multiple themes
+  - Customizable interface
+
+grade: stable
+confinement: strict
+
+apps:
+  pinepods-firewood:
+    command: bin/pinepods_firewood
+    plugs:
+      - audio-playback
+      - network
+      - home
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+
+parts:
+  pinepods-firewood:
+    plugin: rust
+    source: .
+    build-packages:
+      - pkg-config
+      - libasound2-dev
+      - libssl-dev
+    stage-packages:
+      - libasound2
+      - libssl3
