@@ -1,0 +1,296 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  repository_dispatch:
+    types: [release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+  RELEASE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  # Version update job - only runs on workflow_dispatch or repository_dispatch
+  update-version:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Set version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${{ github.event.client_payload.version }}"
+          fi
+          
+          # Remove 'v' prefix if present
+          VERSION=${VERSION#v}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          
+      - name: Update Cargo.toml version
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+          
+      - name: Update Cargo.lock
+        run: |
+          cargo update -p pinepods_firewood --precise ${{ steps.version.outputs.version }}
+          
+      - name: Commit version update
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore: bump version to ${{ steps.version.outputs.version }}" || exit 0
+          
+      - name: Create and push tag
+        run: |
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin main --tags
+
+  # Build job - runs after version update or on tag push
+  build:
+    needs: [update-version]
+    if: always() && (needs.update-version.result == 'success' || github.event_name == 'push')
+    strategy:
+      matrix:
+        include:
+          # Linux targets
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-amd64
+            
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-arm64
+            
+          # macOS targets
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: macos-amd64
+            
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: macos-arm64
+            
+          # Windows targets
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-amd64
+            ext: .exe
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          
+      - name: Install cross-compilation dependencies
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu pkg-config libasound2-dev:arm64
+          echo "PKG_CONFIG_ALLOW_CROSS=1" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
+          
+      - name: Setup macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          # Install required dependencies for audio on macOS
+          brew install pkg-config
+          
+      - name: Setup Windows dependencies  
+        if: runner.os == 'Windows'
+        run: |
+          # Install required dependencies for Windows
+          echo "No additional deps needed for Windows"
+          
+      - name: Build binary
+        run: |
+          cargo build --release --target ${{ matrix.target }}
+          
+      - name: Create package
+        run: |
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/${{ matrix.target }}/release/pinepods_firewood.exe dist/
+          else
+            cp target/${{ matrix.target }}/release/pinepods_firewood dist/
+          fi
+          
+          # Create archive
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a -tzip ../pinepods-firewood-${{ matrix.name }}.zip pinepods_firewood.exe
+          else
+            tar -czf ../pinepods-firewood-${{ matrix.name }}.tar.gz pinepods_firewood
+          fi
+        shell: bash
+        
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pinepods-firewood-${{ matrix.name }}
+          path: |
+            *.tar.gz
+            *.zip
+
+  # Package creation jobs
+  create-packages:
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: Create Debian package
+        run: |
+          VERSION=${RELEASE_VERSION#v}
+          mkdir -p debian/pinepods-firewood/usr/bin
+          mkdir -p debian/pinepods-firewood/DEBIAN
+          
+          # Extract Linux binary
+          tar -xzf pinepods-firewood-linux-amd64/pinepods-firewood-linux-amd64.tar.gz -C debian/pinepods-firewood/usr/bin/
+          
+          # Create control file
+          cat > debian/pinepods-firewood/DEBIAN/control << EOF
+          Package: pinepods-firewood
+          Version: ${VERSION}
+          Section: utils
+          Priority: optional
+          Architecture: amd64
+          Maintainer: PinePods Team <support@pinepods.online>
+          Description: Terminal UI client for PinePods podcast server
+           A fast, lightweight TUI client for interacting with PinePods
+           podcast server instances. Built with Rust and Ratatui.
+          Homepage: https://github.com/madeofpendletonwool/pinepods-firewood
+          EOF
+          
+          # Build package
+          dpkg-deb --build debian/pinepods-firewood
+          mv debian/pinepods-firewood.deb pinepods-firewood_${VERSION}_amd64.deb
+          
+      - name: Create RPM spec
+        run: |
+          VERSION=${RELEASE_VERSION#v}
+          mkdir -p rpm/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+          
+          # Create spec file
+          cat > rpm/SPECS/pinepods-firewood.spec << EOF
+          Name: pinepods-firewood
+          Version: ${VERSION}
+          Release: 1%{?dist}
+          Summary: Terminal UI client for PinePods podcast server
+          License: MIT
+          URL: https://github.com/madeofpendletonwool/pinepods-firewood
+          Source0: pinepods-firewood-linux-amd64.tar.gz
+          
+          BuildRequires: gcc
+          Requires: alsa-lib
+          
+          %description
+          A fast, lightweight TUI client for interacting with PinePods
+          podcast server instances. Built with Rust and Ratatui.
+          
+          %prep
+          %setup -q -n .
+          
+          %build
+          # Binary is pre-built
+          
+          %install
+          mkdir -p %{buildroot}/usr/bin
+          install -m 755 pinepods_firewood %{buildroot}/usr/bin/
+          
+          %files
+          /usr/bin/pinepods_firewood
+          
+          %changelog
+          * $(date "+%a %b %d %Y") PinePods Team <support@pinepods.online> - ${VERSION}-1
+          - Release ${VERSION}
+          EOF
+          
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            *.deb
+            rpm/
+
+  # Release creation
+  create-release:
+    needs: [build, create-packages]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: "PinePods Firewood ${{ env.RELEASE_VERSION }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            */pinepods-firewood-*.tar.gz
+            */pinepods-firewood-*.zip
+            packages/*.deb
+            
+  # Publish to crates.io
+  publish-crate:
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish --allow-dirty || true
+          
+  # Update package repositories
+  update-homebrew:
+    needs: [create-release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Homebrew Formula
+        env:
+          HOMEBREW_GITHUB_API_TOKEN: ${{ secrets.HOMEBREW_GITHUB_API_TOKEN }}
+        run: |
+          # This would update the Homebrew formula
+          # Implementation depends on having a separate tap repository
+          echo "Would update Homebrew formula for version ${{ env.RELEASE_VERSION }}"
