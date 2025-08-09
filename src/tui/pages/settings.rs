@@ -13,6 +13,10 @@ use crate::api::PinepodsClient;
 use crate::settings::{SettingsManager, get_available_audio_devices};
 use crate::theme::ThemeManager;
 
+// Version information
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+const PKG_NAME: &str = env!("CARGO_PKG_NAME");
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum SettingItem {
     AutoLoadEpisodes,
@@ -25,6 +29,7 @@ enum SettingItem {
     UseBorders,
     TabOrder,
     ViewLogs,
+    VersionInfo,
 }
 
 impl SettingItem {
@@ -40,6 +45,7 @@ impl SettingItem {
             Self::UseBorders => "Use Borders",
             Self::TabOrder => "Tab Order",
             Self::ViewLogs => "View Application Logs",
+            Self::VersionInfo => "Version Information",
         }
     }
 
@@ -55,6 +61,7 @@ impl SettingItem {
             Self::UseBorders => "Display borders around UI elements",
             Self::TabOrder => "Customize tab order and appearance",
             Self::ViewLogs => "View application log file contents",
+            Self::VersionInfo => "Application version information",
         }
     }
 }
@@ -70,6 +77,7 @@ const ALL_SETTINGS: &[SettingItem] = &[
     SettingItem::UseBorders,
     SettingItem::TabOrder,
     SettingItem::ViewLogs,
+    SettingItem::VersionInfo,
 ];
 
 pub struct SettingsPage {
@@ -506,6 +514,9 @@ impl SettingsPage {
                     }
                     SettingItem::ViewLogs => {
                         "Click to view".to_string()
+                    }
+                    SettingItem::VersionInfo => {
+                        format!("{} v{}", PKG_NAME, VERSION)
                     }
                 };
 
