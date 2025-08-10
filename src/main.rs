@@ -184,11 +184,18 @@ async fn run_main_app<B: ratatui::prelude::Backend>(
         Ok(mut remote_server) => {
             let allocated_port = remote_server.get_port();
             // Spawn the remote control server in the background
+            #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
             let handle = tokio::spawn(async move {
                 if let Err(e) = remote_server.start().await {
                     log::error!("Remote control server failed: {}", e);
                 }
             });
+            
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            let handle = {
+                log::error!("Remote control server cannot be started on macOS ARM64");
+                tokio::spawn(async {})
+            };
             log::info!("Remote control server started on port {}", allocated_port);
             Some(handle)
         }
