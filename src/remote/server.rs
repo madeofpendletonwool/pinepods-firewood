@@ -26,7 +26,10 @@ pub struct RemoteControlState {
 
 // Since AudioPlayer contains OutputStream which is not Send/Sync, 
 // we need to handle this specially
+// Disable on macOS ARM64 due to CoreAudio compatibility issues
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 unsafe impl Send for RemoteControlState {}
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
 unsafe impl Sync for RemoteControlState {}
 
 pub struct RemoteControlServer {
@@ -36,6 +39,7 @@ pub struct RemoteControlServer {
 }
 
 impl RemoteControlServer {
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     pub fn new(
         audio_player: Option<AudioPlayer>,
         client: Option<PinepodsClient>,
@@ -66,6 +70,7 @@ impl RemoteControlServer {
         })
     }
 
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     pub async fn start(&mut self) -> Result<()> {
         // Register mDNS service
         self.discovery.register_service(
@@ -100,6 +105,7 @@ impl RemoteControlServer {
         Ok(())
     }
 
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     pub async fn stop(&mut self) -> Result<()> {
         log::info!("Stopping remote control server...");
         self.discovery.unregister_service()?;
@@ -143,8 +149,32 @@ impl RemoteControlServer {
     }
     
     /// Get the actual port being used (useful after auto-allocation)
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
     pub fn get_port(&self) -> u16 {
         self.port
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+impl RemoteControlServer {
+    pub fn new(
+        _audio_player: Option<AudioPlayer>,
+        _client: Option<PinepodsClient>,
+        _preferred_port: Option<u16>,
+    ) -> Result<Self> {
+        Err(anyhow::anyhow!("Remote control is not supported on macOS ARM64 due to audio library limitations"))
+    }
+    
+    pub async fn start(&mut self) -> Result<()> {
+        Err(anyhow::anyhow!("Remote control is not supported on macOS ARM64"))
+    }
+    
+    pub async fn stop(&mut self) -> Result<()> {
+        Ok(())
+    }
+    
+    pub fn get_port(&self) -> u16 {
+        0
     }
 }
 
