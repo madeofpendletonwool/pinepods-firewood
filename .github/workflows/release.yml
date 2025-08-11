@@ -41,12 +41,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest  # Apple Silicon runner
             name: macos-arm64
-            
-          # Windows targets
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            name: windows-amd64
-            ext: .exe
 
     runs-on: ${{ matrix.os }}
     
@@ -71,12 +65,6 @@ jobs:
         run: |
           # Install required dependencies for audio on macOS
           brew install pkg-config
-          
-      - name: Setup Windows dependencies  
-        if: runner.os == 'Windows'
-        run: |
-          # Install required dependencies for Windows
-          echo "No additional deps needed for Windows"
           
       - name: Build binary
         run: |
