@@ -34,9 +34,9 @@ jobs:
             name: linux-arm64
             
           # macOS targets
-          - target: x86_64-apple-darwin
-            os: macos-13  # Intel runner
-            name: macos-amd64
+          # - target: x86_64-apple-darwin
+          #   os: macos-13  # Intel runner
+          #   name: macos-amd64
             
           - target: aarch64-apple-darwin
             os: macos-latest  # Apple Silicon runner
