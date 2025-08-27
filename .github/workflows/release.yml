@@ -211,6 +211,7 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             */pinepods-firewood-*.tar.gz
             */pinepods-firewood-*.zip
