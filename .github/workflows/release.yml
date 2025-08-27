@@ -185,11 +185,16 @@ jobs:
   create-release:
     needs: [build, create-packages]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         
       - name: Download all artifacts
         uses: actions/download-artifact@v4
+        
+      - name: List downloaded files for debugging
+        run: find . -name "*.tar.gz" -o -name "*.zip" -o -name "*.deb" | head -20
         
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
@@ -199,7 +204,6 @@ jobs:
           draft: false
           prerelease: false
           generate_release_notes: true
-          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             */pinepods-firewood-*.tar.gz
             */pinepods-firewood-*.zip
