@@ -589,12 +589,20 @@ impl TuiApp {
                             .add_modifier(Modifier::BOLD),
                     ),
                     // Show loading indicator in title area if loading
-                    if matches!(
-                        player_state.playback_state,
+                    if let Some(note) = match player_state.playback_state {
                         crate::playback::PlaybackState::Loading
-                    ) {
+                            if player_state.reconnecting.is_some() =>
+                        {
+                            Some(" (Reconnecting...)")
+                        }
+                        crate::playback::PlaybackState::Loading => Some(" (Loading...)"),
+                        crate::playback::PlaybackState::Playing if player_state.buffering => {
+                            Some(" (Buffering...)")
+                        }
+                        _ => None,
+                    } {
                         Span::styled(
-                            " (Loading...)",
+                            note,
                             Style::default()
                                 .fg(theme_colors.warning)
                                 .add_modifier(Modifier::ITALIC),
@@ -662,6 +670,14 @@ impl TuiApp {
                         format!("{}/{}", current_time, total_time),
                         Style::default().fg(theme_colors.text),
                     ),
+                    if player_state.speed == 1.0 {
+                        Span::raw("")
+                    } else {
+                        Span::styled(
+                            format!(" {}×", player_state.speed),
+                            Style::default().fg(theme_colors.accent),
+                        )
+                    },
                 ]),
                 Line::from(vec![
                     Span::styled(

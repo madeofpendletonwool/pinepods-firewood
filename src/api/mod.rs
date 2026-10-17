@@ -23,6 +23,10 @@ pub type Api = Arc<dyn PinepodsApi>;
 pub trait PinepodsApi: Send + Sync {
     fn user_id(&self) -> i64;
 
+    /// The server's `/stream` URL for an episode it has a copy of. It carries the API
+    /// key in the query (the endpoint takes no header), so never log it.
+    fn stream_url(&self, episode: EpisodeKey) -> String;
+
     /// The theme name chosen in the web app.
     async fn get_theme(&self) -> ApiResult<String>;
 
@@ -72,4 +76,12 @@ pub trait PinepodsApi: Send + Sync {
     async fn increment_played(&self) -> ApiResult<()>;
     async fn mark_completed(&self, episode: EpisodeKey) -> ApiResult<()>;
     async fn mark_uncompleted(&self, episode: EpisodeKey) -> ApiResult<()>;
+
+    // Playback preferences
+    /// Speed and intro/outro skip for a podcast.
+    async fn get_play_details(&self, podcast_id: i64, is_youtube: bool) -> ApiResult<PlayDetails>;
+    /// Silence and ad ranges detected for an episode.
+    async fn get_skip_segments(&self, episode_id: i64) -> ApiResult<Vec<SkipSegment>>;
+    async fn get_silence_trim(&self, podcast_id: i64) -> ApiResult<SilenceTrim>;
+    async fn set_silence_trim(&self, podcast_id: i64, trim: SilenceTrim) -> ApiResult<()>;
 }

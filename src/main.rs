@@ -9,7 +9,7 @@ use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
-use pinepods_firewood::api::http::build_client;
+use pinepods_firewood::api::http::{build_client, build_media_client};
 use pinepods_firewood::api::{HttpApi, PinepodsApi};
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
 use pinepods_firewood::paths;
@@ -21,7 +21,8 @@ use pinepods_firewood::tui::TuiApp;
 const LOG_FILES_KEPT: usize = 7;
 
 /// Logs go to a daily file. `FIREWOOD_LOG` takes an `EnvFilter` directive
-/// (`debug`, `pinepods_firewood=trace`, …); the default is `info`.
+/// (`debug`, `pinepods_firewood=trace`, …); the default is `info`, minus the MP3
+/// decoder's warnings about resyncing, which every seek into an MP3 stream produces.
 fn setup_logging() -> Result<WorkerGuard> {
     let appender = RollingFileAppender::builder()
         .rotation(Rotation::DAILY)
@@ -31,7 +32,8 @@ fn setup_logging() -> Result<WorkerGuard> {
         .build(paths::log_dir()?)
         .context("couldn't open the log file")?;
     let (writer, guard) = tracing_appender::non_blocking(appender);
-    let filter = EnvFilter::try_from_env("FIREWOOD_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter = EnvFilter::try_from_env("FIREWOOD_LOG")
+        .unwrap_or_else(|_| EnvFilter::new("info,symphonia_bundle_mp3=error"));
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_writer(writer)
@@ -71,10 +73,9 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         return Ok(());
     };
 
-    let http = build_client()?;
     let auth = &session.auth_state;
     let api: Arc<dyn PinepodsApi> = Arc::new(HttpApi::new(
-        http.clone(),
+        build_client()?,
         &auth.server_name,
         auth.api_key.clone(),
         i64::from(auth.user_details.UserID),
@@ -86,7 +87,7 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     });
     let playback = Playback::start(
         api.clone(),
-        http,
+        build_media_client()?,
         PlaybackConfig {
             device: settings.selected_audio_device(),
             volume: settings.default_volume(),

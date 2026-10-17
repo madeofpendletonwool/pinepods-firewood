@@ -21,6 +21,19 @@ pub fn build_client() -> reqwest::Result<Client> {
         .build()
 }
 
+/// A client for episode audio. Long episodes stream for hours, so it has no overall
+/// timeout like [`build_client`]; a stalled connection is caught by the read timeout.
+/// It also refuses compression: some proxies gzip MP3s when offered, which hides the
+/// file's length and makes byte ranges meaningless.
+pub fn build_media_client() -> reqwest::Result<Client> {
+    Client::builder()
+        .user_agent(concat!("Firewood/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(CONNECT_TIMEOUT)
+        .read_timeout(REQUEST_TIMEOUT)
+        .no_gzip()
+        .build()
+}
+
 /// Normalizes user input like `pods.example.com/` to `https://pods.example.com`.
 pub fn normalize_server_url(input: &str) -> String {
     let trimmed = input.trim().trim_end_matches('/');
@@ -151,6 +164,20 @@ fn error_message(body: &[u8]) -> String {
 impl PinepodsApi for HttpApi {
     fn user_id(&self) -> i64 {
         self.user_id
+    }
+
+    fn stream_url(&self, episode: EpisodeKey) -> String {
+        let mut url = format!(
+            "{}/api/data/stream/{}?api_key={}&user_id={}",
+            self.server,
+            episode.episode_id,
+            urlencoding::encode(&self.api_key),
+            self.user_id
+        );
+        if episode.is_youtube {
+            url.push_str("&type=youtube");
+        }
+        url
     }
 
     async fn get_theme(&self) -> ApiResult<String> {
@@ -375,5 +402,49 @@ impl PinepodsApi for HttpApi {
             Some(&self.action(episode)),
         )
         .await
+    }
+
+    async fn get_play_details(&self, podcast_id: i64, is_youtube: bool) -> ApiResult<PlayDetails> {
+        let body = PlayDetailsRequest {
+            podcast_id,
+            user_id: self.user_id,
+            is_youtube,
+        };
+        self.post("/api/data/get_play_episode_details", &body).await
+    }
+
+    async fn get_skip_segments(&self, episode_id: i64) -> ApiResult<Vec<SkipSegment>> {
+        let envelope: SkipSegmentsEnvelope = self
+            .get(
+                "/api/data/episode_skip_segments",
+                &[
+                    ("episode_id", episode_id.to_string()),
+                    ("user_id", self.user_id.to_string()),
+                ],
+            )
+            .await?;
+        Ok(envelope.segments)
+    }
+
+    async fn get_silence_trim(&self, podcast_id: i64) -> ApiResult<SilenceTrim> {
+        self.get(
+            "/api/data/get_silence_trim",
+            &[
+                ("podcast_id", podcast_id.to_string()),
+                ("user_id", self.user_id.to_string()),
+            ],
+        )
+        .await
+    }
+
+    async fn set_silence_trim(&self, podcast_id: i64, trim: SilenceTrim) -> ApiResult<()> {
+        let body = SilenceTrimRequest {
+            podcast_id,
+            user_id: self.user_id,
+            enabled: trim.enabled,
+            threshold: trim.threshold,
+        };
+        self.call(Method::POST, "/api/data/adjust_silence_trim", Some(&body))
+            .await
     }
 }
