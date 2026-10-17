@@ -134,6 +134,16 @@ pub struct PodcastsPage {
 }
 
 impl PodcastsPage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<Episode> {
+        if self.focused_panel != FocusPanel::Episodes {
+            return None;
+        }
+        self.selected_podcast_episodes
+            .get(self.episode_list_state.selected()?)
+            .cloned()
+    }
+
     pub fn new(client: Api) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));

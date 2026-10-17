@@ -169,6 +169,18 @@ pub struct EpisodesPage {
 }
 
 impl EpisodesPage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<Episode> {
+        self.filtered_episodes
+            .get(self.list_state.selected()?)
+            .cloned()
+    }
+
+    /// True while the filter box has focus and keys are text.
+    pub fn is_editing(&self) -> bool {
+        self.search_mode
+    }
+
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));

@@ -9,9 +9,11 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
+use super::device_picker::DevicePicker;
 use super::pages::*;
 use crate::api::Api;
 use crate::auth::SessionInfo;
+use crate::nowplaying::NowPlaying;
 use crate::playback::Playback;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
@@ -27,6 +29,7 @@ pub enum AppTab {
     Downloads = 6,
     Search = 7,
     Settings = 8,
+    Devices = 9,
 }
 
 impl AppTab {
@@ -41,6 +44,7 @@ impl AppTab {
             Self::Downloads => "Downloads",
             Self::Search => "Search",
             Self::Settings => "Settings",
+            Self::Devices => "Devices",
         }
     }
 
@@ -55,6 +59,7 @@ impl AppTab {
             Self::Downloads => "📥",
             Self::Search => "🔍",
             Self::Settings => "⚙️",
+            Self::Devices => "📡",
         }
     }
 
@@ -69,6 +74,7 @@ impl AppTab {
             "Downloads" => Some(Self::Downloads),
             "Search" => Some(Self::Search),
             "Settings" => Some(Self::Settings),
+            "Devices" => Some(Self::Devices),
             _ => None,
         }
     }
@@ -84,7 +90,22 @@ impl AppTab {
             Self::Downloads,
             Self::Search,
             Self::Settings,
+            Self::Devices,
         ]
+    }
+
+    /// Tabs that list episodes, where "Play on ▸" applies.
+    fn lists_episodes(self) -> bool {
+        matches!(
+            self,
+            Self::Home
+                | Self::Episodes
+                | Self::Podcasts
+                | Self::Queue
+                | Self::Saved
+                | Self::Downloads
+                | Self::Search
+        )
     }
 
     pub fn ordered_tabs(settings_manager: &crate::settings::SettingsManager) -> Vec<Self> {
@@ -118,6 +139,11 @@ pub struct TuiApp {
 
     // Audio player
     audio_player: Playback,
+    remote: NowPlaying,
+    /// The "Play on ▸" device picker, while open.
+    picker: Option<DevicePicker>,
+    /// The last remote-control notice already shown, so each shows once.
+    notice_seen: Option<Instant>,
 
     // Pages
     home_page: HomePage,
@@ -129,6 +155,7 @@ pub struct TuiApp {
     downloads_page: DownloadsPage,
     search_page: SearchPage,
     settings_page: SettingsPage,
+    devices_page: DevicesPage,
 
     // UI state
     loading: bool,
@@ -155,6 +182,7 @@ impl TuiApp {
         session_info: SessionInfo,
         client: Api,
         audio_player: Playback,
+        remote: NowPlaying,
         settings_manager: SettingsManager,
     ) -> Self {
         let mut theme_manager = ThemeManager::new();
@@ -192,6 +220,9 @@ impl TuiApp {
             should_quit: false,
 
             audio_player: audio_player.clone(),
+            remote: remote.clone(),
+            picker: None,
+            notice_seen: None,
 
             home_page,
             podcasts_page,
@@ -202,6 +233,7 @@ impl TuiApp {
             downloads_page,
             search_page,
             settings_page,
+            devices_page: DevicesPage::new(remote),
 
             loading: false,
             error_message: None,
@@ -237,9 +269,18 @@ impl TuiApp {
             return Ok(());
         }
 
+        if self.picker.is_some() {
+            self.handle_picker_input(key);
+            return Ok(());
+        }
+
         // While a text field has focus every other key is text, so skip the
         // single-key shortcuts (q, Space, digits).
-        let typing = self.active_tab == AppTab::Search && self.search_page.is_editing();
+        let typing = match self.active_tab {
+            AppTab::Search => self.search_page.is_editing(),
+            AppTab::Episodes => self.episodes_page.is_editing(),
+            _ => false,
+        };
 
         match (key.modifiers, key.code) {
             (KeyModifiers::NONE, KeyCode::Char('q')) if !typing => {
@@ -266,9 +307,16 @@ impl TuiApp {
                 self.refresh_current_page().await?;
                 return Ok(());
             }
-            (KeyModifiers::NONE, KeyCode::Char(c @ '1'..='9')) if !typing => {
-                // Numbers follow the tab order as displayed, which the user can change.
-                let index = c as usize - '1' as usize;
+            (KeyModifiers::NONE, KeyCode::Char('o'))
+                if !typing && self.active_tab.lists_episodes() =>
+            {
+                self.open_picker();
+                return Ok(());
+            }
+            (KeyModifiers::NONE, KeyCode::Char(c @ '0'..='9')) if !typing => {
+                // Numbers follow the tab order as displayed, which the user can change;
+                // 0 is the tenth.
+                let index = (c as usize + 10 - '1' as usize) % 10;
                 if let Some(&tab) = AppTab::ordered_tabs(&self.settings_manager).get(index) {
                     self.switch_tab(tab).await?;
                 }
@@ -289,6 +337,7 @@ impl TuiApp {
             AppTab::Saved => self.saved_page.handle_input(key).await?,
             AppTab::Downloads => self.downloads_page.handle_input(key).await?,
             AppTab::Search => self.search_page.handle_input(key).await?,
+            AppTab::Devices => self.devices_page.handle_input(key).await?,
             AppTab::Settings => {
                 self.settings_page.handle_input(key).await?;
                 // Check if theme changed and sync it
@@ -308,6 +357,7 @@ impl TuiApp {
                     self.saved_page.update_theme(&current_theme);
                     self.downloads_page.update_theme(&current_theme);
                     self.search_page.update_theme(&current_theme);
+                    self.devices_page.update_theme(&current_theme);
                 }
                 // Check if tab order changed and sync it
                 let current_tab_order = self.settings_page.settings_manager().tab_order().clone();
@@ -339,6 +389,8 @@ impl TuiApp {
             self.message_timeout = None;
         }
 
+        self.show_remote_notice();
+
         // Update active page
         match self.active_tab {
             AppTab::Home => self.home_page.update().await?,
@@ -350,6 +402,7 @@ impl TuiApp {
             AppTab::Downloads => self.downloads_page.update().await?,
             AppTab::Search => self.search_page.update().await?,
             AppTab::Settings => self.settings_page.update().await?,
+            AppTab::Devices => {}
         }
 
         Ok(())
@@ -412,6 +465,7 @@ impl TuiApp {
             AppTab::Downloads => self.downloads_page.render(frame, main_layout[1]),
             AppTab::Search => self.search_page.render(frame, main_layout[1]),
             AppTab::Settings => self.settings_page.render(frame, main_layout[1]),
+            AppTab::Devices => self.devices_page.render(frame, main_layout[1]),
         }
 
         // Render micro-player
@@ -419,6 +473,15 @@ impl TuiApp {
 
         // Render footer
         self.render_footer(frame, main_layout[3]);
+
+        if let Some(picker) = &mut self.picker {
+            picker.render(
+                frame,
+                frame.area(),
+                self.theme_manager.get_colors(),
+                &self.remote,
+            );
+        }
 
         // Render messages overlay if needed
         self.render_messages_overlay(frame, frame.area());
@@ -739,7 +802,8 @@ impl TuiApp {
         let theme_colors = self.theme_manager.get_colors();
         let shortcuts = [
             ("Tab", "Switch tabs"),
-            ("1-9", "Quick tab"),
+            ("1-0", "Quick tab"),
+            ("o", "Play on…"),
             ("Ctrl+R", "Refresh"),
             ("Ctrl+C/Q", "Quit"),
         ];
@@ -848,6 +912,7 @@ impl TuiApp {
             AppTab::Downloads => self.downloads_page.refresh().await,
             AppTab::Search => self.search_page.refresh().await,
             AppTab::Settings => self.settings_page.refresh().await,
+            AppTab::Devices => Ok(()), // Devices are pushed by the server
         };
 
         self.loading = false;
@@ -862,6 +927,68 @@ impl TuiApp {
         }
 
         Ok(())
+    }
+
+    fn selected_episode(&self) -> Option<crate::api::Episode> {
+        match self.active_tab {
+            AppTab::Home => self.home_page.selected_episode(),
+            AppTab::Episodes => self.episodes_page.selected_episode(),
+            AppTab::Podcasts => self.podcasts_page.selected_episode(),
+            AppTab::Queue => self.queue_page.selected_episode(),
+            AppTab::Saved => self.saved_page.selected_episode(),
+            AppTab::Downloads => self.downloads_page.selected_episode(),
+            AppTab::Search => self.search_page.selected_episode(),
+            AppTab::Player | AppTab::Settings | AppTab::Devices => None,
+        }
+    }
+
+    fn open_picker(&mut self) {
+        let Some(episode) = self.selected_episode() else {
+            self.show_error_message("Select an episode first");
+            return;
+        };
+        if self.remote.state().devices.is_empty() {
+            self.show_error_message("No other devices are connected");
+            return;
+        }
+        self.picker = Some(DevicePicker::new(episode));
+    }
+
+    fn handle_picker_input(&mut self, key: ratatui::crossterm::event::KeyEvent) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        let devices = self.remote.state().devices;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
+            KeyCode::Down | KeyCode::Char('j') => picker.move_by(1, devices.len()),
+            KeyCode::Up | KeyCode::Char('k') => picker.move_by(-1, devices.len()),
+            KeyCode::Enter => {
+                if let Some(device) = devices.get(picker.selected()) {
+                    self.remote
+                        .play_on(&device.device_id, picker.episode().key());
+                }
+                self.picker = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// Shows what came of a remote command (offline target, a handoff landing) as a
+    /// toast, whichever tab is open.
+    fn show_remote_notice(&mut self) {
+        let Some(notice) = self.remote.state().notice else {
+            return;
+        };
+        if self.notice_seen == Some(notice.at) {
+            return;
+        }
+        self.notice_seen = Some(notice.at);
+        if notice.is_error {
+            self.show_error_message(&notice.text);
+        } else {
+            self.show_success_message(&notice.text);
+        }
     }
 
     pub fn show_error_message(&mut self, message: &str) {
@@ -904,6 +1031,7 @@ impl TuiApp {
                     self.saved_page.update_theme(&server_theme);
                     self.downloads_page.update_theme(&server_theme);
                     self.search_page.update_theme(&server_theme);
+                    self.devices_page.update_theme(&server_theme);
                 } else {
                     tracing::warn!("Could not update local settings with server theme");
                 }

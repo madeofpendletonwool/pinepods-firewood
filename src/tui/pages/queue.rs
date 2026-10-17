@@ -119,6 +119,13 @@ pub struct QueuePage {
 }
 
 impl QueuePage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<crate::api::Episode> {
+        self.queue_items
+            .get(self.selected_item)
+            .map(|item| item.episode.clone())
+    }
+
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));

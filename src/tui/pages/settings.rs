@@ -895,8 +895,11 @@ impl SettingsPage {
 
     fn open_tab_order_selector(&mut self) {
         self.tab_order_selector_open = true;
-        // Copy current tab order for editing
-        self.tab_order_editing = self.settings_manager.tab_order().clone();
+        // Edit the order as displayed, which includes tabs added since it was saved.
+        self.tab_order_editing = crate::tui::app::AppTab::ordered_tabs(&self.settings_manager)
+            .into_iter()
+            .map(|tab| tab.title().to_string())
+            .collect();
         self.tab_order_selector_state.select(Some(0));
     }
 

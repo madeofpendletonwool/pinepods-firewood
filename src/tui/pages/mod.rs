@@ -1,3 +1,4 @@
+pub mod devices;
 pub mod downloads;
 pub mod episodes;
 pub mod home;
@@ -8,6 +9,7 @@ pub mod saved;
 pub mod search;
 pub mod settings;
 
+pub use devices::DevicesPage;
 pub use downloads::DownloadsPage;
 pub use episodes::EpisodesPage;
 pub use home::HomePage;
