@@ -124,7 +124,8 @@ impl DevicesPage {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),
+                // Two lines, so a reason for being offline fits.
+                Constraint::Length(4),
                 Constraint::Min(5),
                 Constraint::Length(3),
             ])
@@ -161,6 +162,7 @@ impl DevicesPage {
             Span::styled(format!("{dot} "), Style::default().fg(color)),
             Span::styled(text, Style::default().fg(colors.text)),
         ]))
+        .wrap(Wrap { trim: true })
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -270,7 +272,7 @@ impl DevicesPage {
         let colors = self.theme_manager.get_colors();
         let controls = [
             ("Enter", "Play here"),
-            ("s", "Send what's playing here"),
+            ("s", "Hand off to it"),
             ("p", "Play/Pause"),
             ("←→", "Skip"),
             ("[ ]", "Speed"),

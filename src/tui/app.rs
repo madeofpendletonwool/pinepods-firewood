@@ -539,7 +539,12 @@ impl TuiApp {
                 let actual_idx = start_idx + visible_idx;
                 let icon = tab.icon();
                 let title = tab.title();
-                let shortcut = format!(" {}", actual_idx + 1);
+                // Digit keys reach the first ten tabs, with 0 for the tenth.
+                let shortcut = match actual_idx {
+                    0..=8 => format!(" {}", actual_idx + 1),
+                    9 => " 0".to_string(),
+                    _ => String::new(),
+                };
 
                 Line::from(vec![
                     Span::styled(icon, Style::default().fg(theme_colors.accent)),

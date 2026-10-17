@@ -97,10 +97,11 @@ sudo cp target/release/pinepods_firewood /usr/local/bin/
 
 ### Navigation
 - **Tab**: Switch between tabs (Home, Podcasts, Episodes, Player, etc.)
-- **1-9**: Quick tab switching
+- **1-9, 0**: Quick tab switching (0 is the tenth tab)
 - **Arrow Keys/hjkl**: Navigate lists
 - **Enter**: Select item
 - **Space**: Global play/pause
+- **o**: Play the selected episode on another of your devices
 - **Ctrl+R**: Refresh current page
 - **q**: Quit (Ctrl+C anywhere, including the login screen and while typing)
 
@@ -129,6 +130,12 @@ sudo cp target/release/pinepods_firewood /usr/local/bin/
 - **[ / ]** slower/faster, **=** back to 1×
 - **t** toggles trim silence for the current podcast (saved to PinePods)
 - Progress bar with time display, buffering and skip notices
+
+#### 📡 **Devices**
+- Your other PinePods players (web, mobile, other Firewoods) and what each is playing
+- **Enter** play here: pauses that device and picks up where it is
+- **s** hand off: sends what's playing here to that device, then pauses here once it has it
+- **p** play/pause, **←/→** skip, **[ / ]** speed on that device
 
 #### 📝 **Queue** *(Planned)*
 - Manage episode queue
@@ -195,6 +202,20 @@ FIREWOOD_LOG=debug cargo run
 Logs are written to a daily file under the platform's local data directory
 (`~/Library/Application Support/pinepods-firewood/logs` on macOS,
 `~/.local/share/pinepods-firewood/logs` on Linux), and kept for a week.
+
+## 📡 Remote Control
+
+Firewood holds a socket to your PinePods server (`/ws/api/nowplaying`) so your other
+devices can see what it's playing and control it, and it can control them. Nothing
+listens on your network; the server relays everything. The web and mobile apps can
+beam episodes to Firewood like to any other device, and it accepts their commands.
+
+- Other devices see it as `Firewood · <hostname>`. Set `"remote": {"device_name": "Kitchen Pi"}`
+  in `~/.config/pinepods-firewood/settings.json` to change that.
+- `FIREWOOD_REMOTE_DISABLED=1` turns the socket off.
+- If the Devices tab says the server has no now-playing socket, the server is older
+  than the now-playing release, or a reverse proxy in front of it doesn't pass
+  WebSocket upgrades on `/ws/api/` through.
 
 ## 🐛 Troubleshooting
 
