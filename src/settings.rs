@@ -18,6 +18,7 @@ pub struct AppSettings {
     pub audio: AudioSettings,
     /// UI settings
     pub ui: UiSettings,
+    pub remote: RemoteSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,14 @@ pub struct ThemeSettings {
 #[derive(Default)]
 pub struct AudioSettings {
     pub selected_device: Option<String>,
+}
+
+/// Remote control through the server's now-playing socket.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct RemoteSettings {
+    /// What other devices call this one; `Firewood · <hostname>` when unset.
+    pub device_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +59,7 @@ impl Default for AppSettings {
             theme: ThemeSettings::default(),
             audio: AudioSettings::default(),
             ui: UiSettings::default(),
+            remote: RemoteSettings::default(),
         }
     }
 }
@@ -76,6 +86,7 @@ impl Default for UiSettings {
                 "Downloads".to_string(),
                 "Search".to_string(),
                 "Settings".to_string(),
+                "Devices".to_string(),
             ],
         }
     }
@@ -166,6 +177,10 @@ impl SettingsManager {
 
     pub fn selected_audio_device(&self) -> Option<String> {
         self.settings.audio.selected_device.clone()
+    }
+
+    pub fn device_name(&self) -> Option<String> {
+        self.settings.remote.device_name.clone()
     }
 
     pub fn theme_name(&self) -> &str {
