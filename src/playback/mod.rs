@@ -1,6 +1,6 @@
 //! Playback core: one task that owns what's playing and keeps the server in step.
 //!
-//! [`Playback`] is the handle the UI (and later the now-playing socket) uses. It sends
+//! [`Playback`] is the handle the UI and the now-playing socket use. It sends
 //! commands to a controller task and reads a [`PlayerState`] snapshot back, so nothing
 //! that renders ever waits on audio or the network.
 
@@ -102,7 +102,10 @@ pub struct PlaybackClosed;
 
 #[derive(Debug)]
 enum Command {
-    Play(Episode),
+    Play {
+        episode: Episode,
+        start: Option<Duration>,
+    },
     Pause,
     Resume,
     Stop,
@@ -171,7 +174,23 @@ impl Playback {
     }
 
     pub fn play_episode(&self, episode: Episode) -> Result<(), PlaybackClosed> {
-        self.send(Command::Play(episode))
+        self.send(Command::Play {
+            episode,
+            start: None,
+        })
+    }
+
+    /// Plays an episode from `start` instead of its saved position, for picking up
+    /// where another device left off.
+    pub fn play_episode_from(
+        &self,
+        episode: Episode,
+        start: Duration,
+    ) -> Result<(), PlaybackClosed> {
+        self.send(Command::Play {
+            episode,
+            start: Some(start),
+        })
     }
 
     pub fn pause(&self) -> Result<(), PlaybackClosed> {
@@ -327,7 +346,7 @@ impl Controller {
 
     fn handle(&mut self, command: Command) {
         match command {
-            Command::Play(episode) => self.play(episode),
+            Command::Play { episode, start } => self.play(episode, start),
             Command::Pause => self.set_paused(true),
             Command::Resume => self.resume(),
             Command::Stop => self.stop(),
@@ -351,12 +370,12 @@ impl Controller {
         }
     }
 
-    fn play(&mut self, episode: Episode) {
+    fn play(&mut self, episode: Episode, start: Option<Duration>) {
         self.checkpoint();
         self.cancel_loading();
 
         let track = self.new_track();
-        let start_at = resume_position(&episode);
+        let start_at = start.unwrap_or_else(|| resume_position(&episode));
         tracing::info!(
             episode_id = episode.episode_id,
             start = start_at.as_secs(),
@@ -531,7 +550,7 @@ impl Controller {
                 match episode {
                     Some(episode) if still_finished => {
                         tracing::info!(episode_id = episode.episode_id, "playing next in queue");
-                        self.play(episode);
+                        self.play(episode, None);
                     }
                     _ => {}
                 }
@@ -800,7 +819,7 @@ impl Controller {
                     position.as_secs() as i64
                 });
                 episode.completed = false;
-                self.play(episode);
+                self.play(episode, None);
             }
             None => {}
         }

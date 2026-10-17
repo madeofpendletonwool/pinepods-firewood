@@ -227,6 +227,17 @@ impl PinepodsApi for HttpApi {
         Ok(r.data)
     }
 
+    async fn get_episode_metadata(&self, episode: EpisodeKey) -> ApiResult<Episode> {
+        let body = EpisodeMetadataRequest {
+            episode_id: episode.episode_id,
+            user_id: self.user_id,
+            person_episode: false,
+            is_youtube: episode.is_youtube,
+        };
+        let r: EpisodeEnvelope = self.post("/api/data/get_episode_metadata", &body).await?;
+        Ok(r.episode)
+    }
+
     async fn get_queue(&self) -> ApiResult<Vec<QueueItem>> {
         let r: QueueEnvelope = self
             .get(

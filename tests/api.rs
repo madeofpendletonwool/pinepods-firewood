@@ -321,3 +321,33 @@ async fn silence_trim_round_trip_keeps_the_threshold() {
     trim.enabled = true;
     api.set_silence_trim(9, trim).await.unwrap();
 }
+
+#[tokio::test]
+async fn episode_metadata_reads_the_youtube_shape() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/get_episode_metadata"))
+        .and(body_json(json!({
+            "episode_id": 31, "user_id": USER, "person_episode": false, "is_youtube": true
+        })))
+        .respond_with(ok(json!({"episode": {
+            "podcastid": 4, "podcastindexid": null, "feedurl": "", "podcastname": "Chan",
+            "artworkurl": "", "episodetitle": "Video", "episodepubdate": "2026-01-02T03:04:05",
+            "episodedescription": "", "episodeartwork": "https://i/t.jpg",
+            "episodeurl": "https://www.youtube.com/watch?v=x", "episodeduration": 600,
+            "episodeid": 31, "listenduration": 120, "completed": false, "is_queued": false,
+            "is_saved": true, "is_downloaded": false, "is_youtube": true
+        }})))
+        .mount(&server)
+        .await;
+
+    let key = EpisodeKey {
+        episode_id: 31,
+        is_youtube: true,
+    };
+    let ep = api(&server).await.get_episode_metadata(key).await.unwrap();
+    assert_eq!(ep.key(), key);
+    assert_eq!(ep.podcast_id, Some(4));
+    assert_eq!(ep.listen_duration, Some(120));
+    assert!(ep.saved && !ep.downloaded);
+}
