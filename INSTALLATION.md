@@ -67,11 +67,6 @@ sudo rpm -i pinepods-firewood-VERSION-1.x86_64.rpm
 sudo dnf install ./pinepods-firewood-VERSION-1.x86_64.rpm
 ```
 
-### Snap
-```bash
-sudo snap install pinepods-firewood
-```
-
 ### Windows Package Managers
 
 #### Scoop
@@ -185,9 +180,6 @@ brew upgrade pinepods-firewood
 # Cargo
 cargo install pinepods-firewood --force
 
-# Snap
-sudo snap refresh pinepods-firewood
-
 # AUR
 yay -Syu pinepods-firewood
 ```
@@ -212,9 +204,6 @@ brew uninstall pinepods-firewood
 
 # Cargo
 cargo uninstall pinepods-firewood
-
-# Snap
-sudo snap remove pinepods-firewood
 
 # APT
 sudo apt remove pinepods-firewood

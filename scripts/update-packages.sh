@@ -95,22 +95,6 @@ update_homebrew_formula() {
     fi
 }
 
-update_snap_version() {
-    local version="$1"
-    local snap_file="snap/snapcraft.yaml"
-    
-    log_info "Updating Snap version to $version"
-    
-    if [ -f "$snap_file" ]; then
-        # Update version in snapcraft.yaml
-        sed -i.bak "s/^version:.*/version: '$version'/" "$snap_file"
-        rm "$snap_file.bak"
-        log_success "Updated $snap_file"
-    else
-        log_warn "Snap file not found: $snap_file"
-    fi
-}
-
 update_aur_pkgbuild() {
     local version="$1"
     
@@ -236,7 +220,6 @@ main() {
     
     # Update all package configurations
     update_homebrew_formula "$VERSION"
-    update_snap_version "$VERSION"
     update_aur_pkgbuild "$VERSION"
     create_winget_manifest "$VERSION"
     
@@ -248,7 +231,6 @@ main() {
         echo "2. Submit to package managers as needed:"
         echo "   - Homebrew: Create PR to homebrew-core or your tap"
         echo "   - AUR: Update the pinepods-firewood AUR package"
-        echo "   - Snap: Run 'snapcraft upload' if you have store access"
         echo "   - Winget: Submit PR to microsoft/winget-pkgs"
         echo "3. Test installations from various package managers"
     else

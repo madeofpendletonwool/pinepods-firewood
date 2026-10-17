@@ -18,3 +18,9 @@ target/
 
 /target
 output.log
+*.log
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
