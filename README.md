@@ -207,36 +207,6 @@ Firewood advertises itself via mDNS as:
 | `/seek` | POST | Seek to position | `{"position": 120}` |
 | `/volume` | POST | Set volume | `{"volume": 0.7}` (0.0-1.0) |
 
-### 🧪 **Testing & Manual Control**
-
-A Python test script is included for discovery and manual control:
-
-```bash
-# Setup (one time)
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Discover Firewood players on network
-python test_remote_control.py --discover
-
-# Interactive control
-python test_remote_control.py -u http://IP:PORT --interactive
-
-# Direct connection (if you know the IP/port)
-python test_remote_control.py -u http://192.168.1.100:8042 --interactive
-```
-
-**Interactive Commands:**
-- `s` - Show playback status
-- `p` - Pause/resume toggle
-- `stop` - Stop playback
-- `+15` - Skip forward 15 seconds
-- `-15` - Skip backward 15 seconds  
-- `vol 75` - Set volume to 75%
-- `play` - Play test episode
-- `q` - Quit
-
 ## 🔗 Web UI Integration *(Future)*
 
 When implemented in the PinePods web interface:
