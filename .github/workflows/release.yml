@@ -64,7 +64,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libasound2-dev libssl-dev
+          sudo apt-get install -y pkg-config libasound2-dev libssl-dev libclang-dev
           
       - name: Setup macOS dependencies
         if: runner.os == 'macOS'

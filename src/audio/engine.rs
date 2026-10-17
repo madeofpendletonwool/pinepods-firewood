@@ -2,21 +2,25 @@
 //!
 //! rodio's device sink isn't `Send` on macOS, so a dedicated thread owns it along with
 //! the [`Player`]. Everyone else talks to it through [`AudioEngine`], a cheap
-//! `Send + Sync` handle. The thread never touches the network: it's handed encoded
-//! audio and only decodes and plays.
+//! `Send + Sync` handle. Decoding happens on each [`Track`]'s own thread, so nothing
+//! here ever waits on the network.
 
-use std::io::Cursor;
 use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Weak};
 use std::thread;
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
-use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+use rodio::{ChannelCount, DeviceSinkBuilder, MixerDeviceSink, Player, SampleRate};
 use thiserror::Error;
 use tokio::sync::{mpsc, watch};
 
+use super::media::Media;
+use super::skip::{SkipPlan, SkipRange};
+use super::track::{Track, TrackEvent, TrackOptions};
+
 /// How often the thread samples the playback position and checks for the end.
-const POLL_INTERVAL: Duration = Duration::from_millis(200);
+const POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Error)]
 pub enum EngineError {
@@ -30,18 +34,27 @@ pub enum EngineError {
 /// can be told apart and ignored.
 pub type TrackId = u64;
 
-#[derive(Debug)]
 enum Command {
     Load {
         track: TrackId,
-        data: Vec<u8>,
+        media: Media,
         start: Duration,
         paused: bool,
+        speed: f32,
+        skips: SkipPlan,
+    },
+    /// From the decoder thread: the format is known, so output can start.
+    Ready {
+        track: TrackId,
+        channels: ChannelCount,
+        sample_rate: SampleRate,
     },
     Play,
     Pause,
     Stop,
     Seek(Duration),
+    SetSpeed(f32),
+    SetSkips(SkipPlan),
     SetVolume(f32),
 }
 
@@ -55,13 +68,21 @@ pub enum EngineEvent {
     Finished {
         track: TrackId,
     },
+    /// Opening or reading the audio failed. `position` is where reading stopped;
+    /// `retryable` is false when the data itself is bad.
     Failed {
         track: TrackId,
         message: String,
+        position: Duration,
+        retryable: bool,
     },
     SeekFailed {
         track: TrackId,
         message: String,
+    },
+    Skipped {
+        track: TrackId,
+        range: SkipRange,
     },
 }
 
@@ -70,12 +91,17 @@ pub struct EngineStatus {
     pub track: Option<TrackId>,
     pub paused: bool,
     pub position: Duration,
+    /// Waiting on the network: the device is playing silence.
+    pub buffering: bool,
 }
 
 #[derive(Clone)]
 pub struct AudioEngine {
     commands: std_mpsc::Sender<Command>,
     status: watch::Receiver<EngineStatus>,
+    /// The thread exits once every handle is gone. Decoder threads hold senders too,
+    /// so a closed channel alone can't signal that.
+    _alive: Arc<()>,
 }
 
 impl AudioEngine {
@@ -90,6 +116,9 @@ impl AudioEngine {
         let (status_tx, status) = watch::channel(EngineStatus::default());
         let (ready_tx, ready_rx) = std_mpsc::sync_channel(1);
 
+        let self_tx = commands.clone();
+        let alive = Arc::new(());
+        let handles = Arc::downgrade(&alive);
         thread::Builder::new()
             .name("firewood-audio".into())
             .spawn(move || {
@@ -105,30 +134,45 @@ impl AudioEngine {
                 };
                 EngineThread {
                     sink,
-                    player: None,
-                    track: None,
+                    current: None,
                     volume,
                     status: status_tx,
                     events,
+                    commands: self_tx,
+                    handles,
                 }
                 .run(rx);
             })
             .map_err(|_| EngineError::ThreadGone)?;
 
         ready_rx.recv().map_err(|_| EngineError::ThreadGone)??;
-        Ok(Self { commands, status })
+        Ok(Self {
+            commands,
+            status,
+            _alive: alive,
+        })
     }
 
     pub fn status(&self) -> EngineStatus {
         *self.status.borrow()
     }
 
-    pub fn load(&self, track: TrackId, data: Vec<u8>, start: Duration, paused: bool) {
+    pub fn load(
+        &self,
+        track: TrackId,
+        media: Media,
+        start: Duration,
+        paused: bool,
+        speed: f32,
+        skips: SkipPlan,
+    ) {
         self.send(Command::Load {
             track,
-            data,
+            media,
             start,
             paused,
+            speed,
+            skips,
         });
     }
 
@@ -146,6 +190,14 @@ impl AudioEngine {
 
     pub fn seek(&self, position: Duration) {
         self.send(Command::Seek(position));
+    }
+
+    pub fn set_speed(&self, speed: f32) {
+        self.send(Command::SetSpeed(speed));
+    }
+
+    pub fn set_skips(&self, skips: SkipPlan) {
+        self.send(Command::SetSkips(skips));
     }
 
     pub fn set_volume(&self, volume: f32) {
@@ -194,13 +246,23 @@ fn open_sink(device: Option<&str>) -> Result<MixerDeviceSink, EngineError> {
     Ok(sink)
 }
 
+struct Current {
+    id: TrackId,
+    track: Track,
+    /// Created once the decoder knows the format.
+    player: Option<Player>,
+    paused: bool,
+}
+
 struct EngineThread {
     sink: MixerDeviceSink,
-    player: Option<Player>,
-    track: Option<TrackId>,
+    current: Option<Current>,
     volume: f32,
     status: watch::Sender<EngineStatus>,
     events: mpsc::UnboundedSender<EngineEvent>,
+    /// Handed to decoder threads so they can report back here.
+    commands: std_mpsc::Sender<Command>,
+    handles: Weak<()>,
 }
 
 impl EngineThread {
@@ -211,127 +273,180 @@ impl EngineThread {
                 Err(std_mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
             }
+            if self.handles.strong_count() == 0 {
+                break;
+            }
             self.poll();
         }
-        if let Some(player) = self.player.take() {
-            player.stop();
-        }
+        self.stop();
     }
 
     fn handle(&mut self, command: Command) {
         match command {
             Command::Load {
                 track,
-                data,
+                media,
                 start,
                 paused,
-            } => self.load(track, data, start, paused),
-            Command::Play => {
-                if let Some(player) = &self.player {
-                    player.play();
-                }
-            }
-            Command::Pause => {
-                if let Some(player) = &self.player {
-                    player.pause();
-                }
-            }
-            Command::Stop => {
-                if let Some(player) = self.player.take() {
-                    player.stop();
-                }
-                self.track = None;
-            }
+                speed,
+                skips,
+            } => self.load(track, media, start, paused, speed, skips),
+            Command::Ready {
+                track,
+                channels,
+                sample_rate,
+            } => self.start_output(track, channels, sample_rate),
+            Command::Play => self.set_paused(false),
+            Command::Pause => self.set_paused(true),
+            Command::Stop => self.stop(),
             Command::Seek(position) => {
-                if let (Some(player), Some(track)) = (&self.player, self.track)
-                    && let Err(err) = player.try_seek(position)
-                {
-                    self.emit(EngineEvent::SeekFailed {
-                        track,
-                        message: err.to_string(),
-                    });
+                if let Some(current) = &self.current {
+                    current.track.seek(position);
+                }
+            }
+            Command::SetSpeed(speed) => {
+                if let Some(current) = &self.current {
+                    current.track.set_speed(speed);
+                }
+            }
+            Command::SetSkips(skips) => {
+                if let Some(current) = &self.current {
+                    current.track.set_skips(skips);
                 }
             }
             Command::SetVolume(volume) => {
                 self.volume = volume;
-                if let Some(player) = &self.player {
+                if let Some(player) = self.current.as_ref().and_then(|c| c.player.as_ref()) {
                     player.set_volume(volume);
                 }
             }
         }
     }
 
-    fn load(&mut self, track: TrackId, data: Vec<u8>, start: Duration, paused: bool) {
-        if let Some(old) = self.player.take() {
-            old.stop();
-        }
-        self.track = Some(track);
+    fn load(
+        &mut self,
+        id: TrackId,
+        media: Media,
+        start: Duration,
+        paused: bool,
+        speed: f32,
+        skips: SkipPlan,
+    ) {
+        self.stop();
+        let commands = self.commands.clone();
+        let events = self.events.clone();
+        let track = Track::spawn(
+            media,
+            TrackOptions {
+                start,
+                speed,
+                skips,
+            },
+            move |event| {
+                let event = match event {
+                    TrackEvent::Ready {
+                        channels,
+                        sample_rate,
+                        duration,
+                    } => {
+                        let _ = commands.send(Command::Ready {
+                            track: id,
+                            channels,
+                            sample_rate,
+                        });
+                        EngineEvent::Loaded {
+                            track: id,
+                            duration,
+                        }
+                    }
+                    TrackEvent::SeekFailed { message } => {
+                        EngineEvent::SeekFailed { track: id, message }
+                    }
+                    TrackEvent::Failed {
+                        message,
+                        position,
+                        retryable,
+                    } => EngineEvent::Failed {
+                        track: id,
+                        message,
+                        position,
+                        retryable,
+                    },
+                };
+                let _ = events.send(event);
+            },
+        );
+        self.current = Some(Current {
+            id,
+            track,
+            player: None,
+            paused,
+        });
+    }
 
-        let len = data.len() as u64;
-        let decoder = Decoder::builder()
-            .with_data(Cursor::new(data))
-            .with_byte_len(len)
-            .with_seekable(true)
-            .build();
-        let decoder = match decoder {
-            Ok(d) => d,
-            Err(err) => {
-                self.track = None;
-                self.emit(EngineEvent::Failed {
-                    track,
-                    message: format!("couldn't decode the audio: {err}"),
-                });
-                return;
-            }
+    fn start_output(&mut self, id: TrackId, channels: ChannelCount, sample_rate: SampleRate) {
+        let Some(current) = self.current.as_mut().filter(|c| c.id == id) else {
+            return;
         };
-        let duration = decoder.total_duration();
-
         let player = Player::connect_new(self.sink.mixer());
         player.set_volume(self.volume);
-        // Start paused so the resume seek happens before any sound comes out.
-        player.pause();
-        player.append(decoder);
-        if !start.is_zero()
-            && let Err(err) = player.try_seek(start)
+        if current.paused {
+            player.pause();
+        }
+        player.append(current.track.source(channels, sample_rate));
+        current.player = Some(player);
+    }
+
+    fn set_paused(&mut self, paused: bool) {
+        let Some(current) = self.current.as_mut() else {
+            return;
+        };
+        current.paused = paused;
+        if let Some(player) = &current.player {
+            if paused {
+                player.pause();
+            } else {
+                player.play();
+            }
+        }
+    }
+
+    fn stop(&mut self) {
+        if let Some(current) = self.current.take()
+            && let Some(player) = current.player
         {
-            self.emit(EngineEvent::SeekFailed {
-                track,
-                message: err.to_string(),
-            });
+            player.stop();
         }
-        if !paused {
-            player.play();
-        }
-        self.player = Some(player);
-        self.emit(EngineEvent::Loaded { track, duration });
     }
 
     fn poll(&mut self) {
-        let status = match (&self.player, self.track) {
-            (Some(player), Some(track)) => {
-                if player.empty() {
-                    self.player = None;
-                    self.track = None;
-                    self.emit(EngineEvent::Finished { track });
-                    EngineStatus::default()
-                } else {
-                    EngineStatus {
-                        track: Some(track),
-                        paused: player.is_paused(),
-                        position: player.get_pos(),
-                    }
+        let status = match &self.current {
+            Some(current) if current.player.is_some() && current.track.drained() => {
+                let id = current.id;
+                self.stop();
+                let _ = self.events.send(EngineEvent::Finished { track: id });
+                EngineStatus::default()
+            }
+            Some(current) => {
+                if let Some(range) = current.track.take_played_skip() {
+                    let _ = self.events.send(EngineEvent::Skipped {
+                        track: current.id,
+                        range,
+                    });
+                }
+                EngineStatus {
+                    track: Some(current.id),
+                    paused: current.paused,
+                    position: current.track.position(),
+                    buffering: !current.paused && current.track.starved(),
                 }
             }
-            _ => EngineStatus::default(),
+            None => EngineStatus::default(),
         };
         self.status.send_if_modified(|current| {
             let changed = *current != status;
             *current = status;
             changed
         });
-    }
-
-    fn emit(&self, event: EngineEvent) {
-        let _ = self.events.send(event);
     }
 }
