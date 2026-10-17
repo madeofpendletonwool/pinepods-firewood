@@ -237,9 +237,22 @@ fn open_sink(device: Option<&str>) -> Result<MixerDeviceSink, EngineError> {
         }
         found
     });
-    let mut sink = match named {
-        Some(device) => DeviceSinkBuilder::from_device(device)?.open_stream()?,
-        None => DeviceSinkBuilder::open_default_sink()?,
+    let device = match named {
+        Some(device) => device,
+        None => rodio::cpal::default_host()
+            .default_output_device()
+            .ok_or(rodio::DeviceSinkError::NoDevice)?,
+    };
+    // rodio asks for a fixed ~50 ms buffer, which some devices refuse (Bluetooth
+    // headphones on macOS, for one). Their own default size works everywhere.
+    let mut sink = match DeviceSinkBuilder::from_device(device.clone())?.open_stream() {
+        Ok(sink) => sink,
+        Err(err) => {
+            tracing::info!("audio device refused rodio's buffer size ({err}); using its default");
+            DeviceSinkBuilder::from_device(device)?
+                .with_buffer_size(rodio::cpal::BufferSize::Default)
+                .open_stream()?
+        }
     };
     // rodio prints to stderr when the sink drops, which would land on the TUI.
     sink.log_on_drop(false);

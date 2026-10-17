@@ -144,6 +144,19 @@ enum HomeItem {
 }
 
 impl HomePage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<Episode> {
+        match self
+            .sections
+            .get(self.selected_section)?
+            .items
+            .get(self.selected_item)?
+        {
+            HomeItem::Episode(episode) => Some(episode.clone()),
+            HomeItem::Stat(_) => None,
+        }
+    }
+
     pub fn new(client: Api) -> Self {
         let mut item_list_state = ListState::default();
         item_list_state.select(Some(0));

@@ -283,6 +283,11 @@ pub(crate) struct EpisodesEnvelope {
 }
 
 #[derive(Debug, Deserialize)]
+pub(crate) struct EpisodeEnvelope {
+    pub episode: Episode,
+}
+
+#[derive(Debug, Deserialize)]
 pub(crate) struct QueueEnvelope {
     pub data: Vec<QueueItem>,
 }
@@ -350,6 +355,14 @@ pub(crate) struct HistoryRequest {
     pub episode_id: i64,
     pub episode_pos: f64,
     pub user_id: i64,
+    pub is_youtube: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct EpisodeMetadataRequest {
+    pub episode_id: i64,
+    pub user_id: i64,
+    pub person_episode: bool,
     pub is_youtube: bool,
 }
 

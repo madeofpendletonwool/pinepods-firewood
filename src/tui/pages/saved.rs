@@ -119,6 +119,13 @@ pub struct SavedPage {
 }
 
 impl SavedPage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<Episode> {
+        self.saved_episodes
+            .get(self.list_state.selected()?)
+            .cloned()
+    }
+
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));

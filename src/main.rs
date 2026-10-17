@@ -12,6 +12,7 @@ use tracing_subscriber::EnvFilter;
 use pinepods_firewood::api::http::{build_client, build_media_client};
 use pinepods_firewood::api::{HttpApi, PinepodsApi};
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
+use pinepods_firewood::nowplaying::{self, NowPlaying};
 use pinepods_firewood::paths;
 use pinepods_firewood::playback::{Playback, PlaybackConfig};
 use pinepods_firewood::settings::SettingsManager;
@@ -94,16 +95,26 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         },
     )
     .context("couldn't start audio")?;
+    let remote = NowPlaying::start(
+        nowplaying::Config {
+            server: auth.server_name.clone(),
+            api_key: auth.api_key.clone(),
+            user_id: i64::from(auth.user_details.UserID),
+            device_name: settings.device_name(),
+        },
+        api.clone(),
+        playback.clone(),
+    );
 
-    let mut app = TuiApp::new(session, api, playback.clone(), settings);
+    let mut app = TuiApp::new(session, api, playback.clone(), remote.clone(), settings);
     if let Err(e) = app.initialize().await {
         tracing::warn!("couldn't load the library: {e:#}");
         app.show_error_message(&format!("Couldn't load your library: {e}"));
     }
     let terminated = Arc::new(AtomicBool::new(false));
-    watch_for_termination(terminated.clone(), playback.clone());
+    watch_for_termination(terminated.clone(), playback.clone(), remote.clone());
     let result = run_main_app(terminal, app, &terminated).await;
-    playback.shutdown().await;
+    tokio::join!(remote.shutdown(), playback.shutdown());
     result
 }
 
@@ -171,7 +182,7 @@ async fn run_main_app(
 /// normally. SIGHUP means the terminal is gone: crossterm then spins on a dead tty
 /// instead of returning from `poll`, so the loop would never notice a flag. Save and
 /// exit from here instead.
-fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback) {
+fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback, remote: NowPlaying) {
     #[cfg(unix)]
     tokio::spawn(async move {
         use tokio::signal::unix::{SignalKind, signal};
@@ -189,11 +200,11 @@ fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback) {
             }
             _ = hup.recv() => {
                 tracing::info!("terminal closed; saving and exiting");
-                playback.shutdown().await;
+                tokio::join!(remote.shutdown(), playback.shutdown());
                 std::process::exit(0);
             }
         }
     });
     #[cfg(not(unix))]
-    let _ = (flag, playback);
+    let _ = (flag, playback, remote);
 }

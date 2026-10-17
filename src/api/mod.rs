@@ -36,6 +36,9 @@ pub trait PinepodsApi: Send + Sync {
     async fn get_home_overview(&self) -> ApiResult<HomeOverview>;
     async fn get_recent_episodes(&self) -> ApiResult<Vec<Episode>>;
     async fn search(&self, term: &str) -> ApiResult<Vec<SearchResultItem>>;
+    /// One episode with this user's position and flags, for starting an episode
+    /// another device asked for by id.
+    async fn get_episode_metadata(&self, episode: EpisodeKey) -> ApiResult<Episode>;
 
     // Queue
     async fn get_queue(&self) -> ApiResult<Vec<QueueItem>>;

@@ -142,6 +142,16 @@ struct PodcastWithDownloads {
 }
 
 impl DownloadsPage {
+    /// The episode under the cursor, for "Play on ▸".
+    pub fn selected_episode(&self) -> Option<crate::api::Episode> {
+        if self.focused_panel != FocusPanel::Downloads {
+            return None;
+        }
+        self.selected_podcast_downloads
+            .get(self.download_list_state.selected()?)
+            .map(|item| item.episode.clone())
+    }
+
     pub fn new(client: Api) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));
