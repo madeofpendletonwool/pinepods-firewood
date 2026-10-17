@@ -1,20 +1,18 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+use ratatui::crossterm::event::{KeyCode, KeyEventKind};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Clear, Gauge, List, ListItem, Paragraph, 
-        Tabs, Wrap
+        Block, BorderType, Borders, Clear, Gauge, Paragraph, Wrap
     },
     Frame,
 };
 use std::time::{Duration, Instant};
-use chrono_tz::{TZ_VARIANTS, Tz};
+use chrono_tz::TZ_VARIANTS;
 
-use super::{LoginFlow, LoginState, SessionInfo};
-use super::login_flow::LoginResult;
+use super::{LoginFlow, LoginResult, SessionInfo};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LoginTab {
@@ -95,9 +93,9 @@ pub struct LoginTui {
 }
 
 impl LoginTui {
-    pub fn new() -> Self {
-        Self {
-            login_flow: LoginFlow::new(),
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            login_flow: LoginFlow::new()?,
             active_tab: LoginTab::Server,
             
             server_input: String::new(),
@@ -126,44 +124,14 @@ impl LoginTui {
             
             animation_frame: 0,
             last_animation_update: Instant::now(),
-        }
+        })
     }
 
-    pub async fn check_existing_auth(&mut self) -> Result<Option<SessionInfo>> {
-        // First try to load from session storage (new persistent storage)
-        if let Ok(Some(stored_session)) = super::SessionStorage::load_session() {
-            log::info!("Found stored session for user: {}", stored_session.username);
-            
-            match stored_session.to_auth_state() {
-                Ok(auth_state) => {
-                    // Verify the stored session is still valid by making a test API call
-                    if let Err(e) = self.login_flow.auth_manager.verify_pinepods_instance(&auth_state.server_name).await {
-                        log::warn!("Stored session server verification failed: {}, clearing session", e);
-                        let _ = super::SessionStorage::clear_session();
-                    } else {
-                        // Create session info from stored session
-                        let session_info = SessionInfo {
-                            auth_state,
-                            is_first_login: false, // If we have a stored session, first login was completed
-                            timezone_configured: true, // Assume configured if we have a session
-                        };
-                        
-                        log::info!("Successfully restored session for user: {}", stored_session.username);
-                        return Ok(Some(session_info));
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to restore auth state from stored session: {}, clearing session", e);
-                    let _ = super::SessionStorage::clear_session();
-                }
-            }
-        }
-        
-        // Fallback to old auth check method
-        self.login_flow.check_existing_auth().await
+    pub async fn check_existing_auth(&mut self) -> Option<SessionInfo> {
+        self.login_flow.restore_session().await
     }
 
-    pub async fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> Result<Option<SessionInfo>> {
+    pub async fn handle_input(&mut self, key: ratatui::crossterm::event::KeyEvent) -> Result<Option<SessionInfo>> {
         if key.kind != KeyEventKind::Press {
             return Ok(None);
         }
@@ -202,11 +170,10 @@ impl LoginTui {
                     self.handle_selection_up();
                 }
             }
-            KeyCode::Down => {
-                if self.active_tab == LoginTab::Setup {
+            KeyCode::Down
+                if self.active_tab == LoginTab::Setup => {
                     self.handle_selection_down();
                 }
-            }
             _ => {}
         }
 
@@ -228,11 +195,10 @@ impl LoginTui {
                 }
             }
             LoginTab::MFA => {
-                if self.current_field == 0 && self.mfa_input.len() < 6 {
-                    if c.is_ascii_digit() {
+                if self.current_field == 0 && self.mfa_input.len() < 6
+                    && c.is_ascii_digit() {
                         self.mfa_input.push(c);
                     }
-                }
             }
             LoginTab::FirstAdmin => {
                 match self.current_field {
@@ -296,7 +262,7 @@ impl LoginTui {
                 }
                 
                 self.progress = 25;
-                let result = self.login_flow.verify_server(&self.server_input).await?;
+                let result = self.login_flow.verify_server(&self.server_input).await;
                 self.progress = 50;
                 result
             }
@@ -312,7 +278,7 @@ impl LoginTui {
                     &self.server_input, 
                     &self.username_input, 
                     &self.password_input
-                ).await?;
+                ).await;
                 self.progress = 75;
                 result
             }
@@ -324,7 +290,7 @@ impl LoginTui {
                 }
                 
                 self.progress = 50;
-                let result = self.login_flow.verify_mfa(&self.mfa_input).await?;
+                let result = self.login_flow.verify_mfa(&self.mfa_input).await;
                 self.progress = 90;
                 result
             }
@@ -343,7 +309,7 @@ impl LoginTui {
                     self.admin_password.clone(),
                     self.admin_email.clone(),
                     self.admin_fullname.clone(),
-                ).await?;
+                ).await;
                 self.progress = 75;
                 result
             }
@@ -359,7 +325,7 @@ impl LoginTui {
                     self.get_selected_timezone().to_string(),
                     self.get_selected_hour_format(),
                     self.get_selected_date_format().to_string(),
-                ).await?;
+                ).await;
                 self.progress = 100;
                 result
             }
@@ -370,7 +336,7 @@ impl LoginTui {
         match result {
             LoginResult::Success(session_info) => {
                 self.success_message = Some("Login successful!".to_string());
-                Ok(Some(session_info))
+                Ok(Some(*session_info))
             }
             LoginResult::ServerVerified => {
                 self.active_tab = LoginTab::Credentials;
@@ -378,20 +344,20 @@ impl LoginTui {
                 self.success_message = Some("Server verified! Please enter your credentials".to_string());
                 Ok(None)
             }
-            LoginResult::MfaRequired { .. } => {
+            LoginResult::MfaRequired => {
                 self.active_tab = LoginTab::MFA;
                 self.current_field = 0;
                 self.mfa_input.clear();
                 self.success_message = Some("MFA code required".to_string());
                 Ok(None)
             }
-            LoginResult::FirstAdminRequired { .. } => {
+            LoginResult::FirstAdminRequired => {
                 self.active_tab = LoginTab::FirstAdmin;
                 self.current_field = 0;
                 self.success_message = Some("Server requires initial admin setup".to_string());
                 Ok(None)
             }
-            LoginResult::FirstTimeSetup { .. } => {
+            LoginResult::FirstTimeSetup => {
                 self.active_tab = LoginTab::Setup;
                 self.current_field = 0;
                 self.success_message = Some("Please complete your profile setup".to_string());
@@ -606,7 +572,7 @@ impl LoginTui {
         let password_display = if self.show_password {
             self.password_input.clone()
         } else {
-            "*".repeat(self.password_input.len())
+            "*".repeat(self.password_input.chars().count())
         };
 
         let password_input = Paragraph::new(password_display.as_str())
@@ -752,7 +718,7 @@ impl LoginTui {
         for (i, (label, value)) in fields.iter().enumerate() {
             let is_active = self.current_field == i;
             let display_value = if label == &"Password" && !self.show_password {
-                "*".repeat(value.len())
+                "*".repeat(value.chars().count())
             } else {
                 value.to_string()
             };
@@ -909,7 +875,9 @@ impl LoginTui {
             Span::styled("Enter", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
             Span::styled(" Submit  ", Style::default().fg(Color::Gray)),
             Span::styled("Esc", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(" Clear messages", Style::default().fg(Color::Gray)),
+            Span::styled(" Clear messages  ", Style::default().fg(Color::Gray)),
+            Span::styled("Ctrl+C", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(" Quit", Style::default().fg(Color::Gray)),
         ];
 
         if matches!(self.active_tab, LoginTab::Credentials | LoginTab::FirstAdmin) {
@@ -1030,9 +998,6 @@ impl LoginTui {
         TZ_VARIANTS.iter().map(|tz| tz.name()).collect()
     }
 
-    fn get_hour_format_options() -> Vec<&'static str> {
-        vec!["12 Hour", "24 Hour"]
-    }
 
     fn get_date_format_options() -> Vec<&'static str> {
         vec!["MM-DD-YYYY", "DD-MM-YYYY", "YYYY-MM-DD"]

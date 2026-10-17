@@ -1,348 +1,246 @@
-use anyhow::{anyhow, Result};
-use reqwest::Client;
+//! The HTTP calls that happen before there's a session: server check, login, MFA,
+//! first-admin creation and first-run setup.
+
+use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
+use reqwest::{Client, RequestBuilder, StatusCode};
+use serde::de::DeserializeOwned;
+
 use super::models::*;
+use crate::api::ApiError;
+use crate::api::http::build_client;
 
 pub struct AuthManager {
     client: Client,
 }
 
-#[derive(Debug, Clone)]
-pub enum AuthManagerResult {
-    Success(GetUserDetails, LoginServerRequest, GetApiDetails),
+pub enum LoginOutcome {
+    /// Logged in; holds the API key.
+    Key(String),
     MfaRequired {
-        server_name: String,
-        username: String,
         user_id: i32,
         mfa_session_token: String,
     },
 }
 
 impl AuthManager {
-    pub fn new() -> Self {
-        Self {
-            client: Client::new(),
-        }
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            client: build_client()?,
+        })
     }
 
-    // Step 1: Verify if server is a Pinepods instance
-    pub async fn verify_pinepods_instance(&self, server_name: &str) -> Result<PinepodsCheckResponse> {
-        let server_name = server_name.trim_end_matches('/');
-        let url = format!("{}/api/pinepods_check", server_name);
-        
-        let response = self.client.get(&url).send().await?;
-
-        if response.status().is_success() {
-            let check_data: PinepodsCheckResponse = response.json().await?;
-            if check_data.pinepods_instance {
-                Ok(check_data)
-            } else {
-                Err(anyhow!("Server is not a Pinepods instance"))
-            }
-        } else {
-            let status = response.status();
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(anyhow!("Failed to verify Pinepods instance ({}): {}", status, error_text))
+    async fn json<T: DeserializeOwned>(&self, req: RequestBuilder, what: &str) -> Result<T> {
+        let resp = req.send().await.map_err(ApiError::from)?;
+        let status = resp.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(ApiError::Unauthorized.into());
         }
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            let detail = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("detail").and_then(|d| d.as_str()).map(str::to_string))
+                .unwrap_or_else(|| status.to_string());
+            bail!("{what} failed: {detail}");
+        }
+        resp.json()
+            .await
+            .map_err(ApiError::from)
+            .with_context(|| format!("{what}: unexpected response"))
     }
 
-    // Main login function that handles secure MFA flow
-    pub async fn login_new_server_secure(&self, server_name: String, username: String, password: String) -> Result<AuthManagerResult> {
-        let credentials = STANDARD.encode(format!("{}:{}", username, password).as_bytes());
-        let auth_header = format!("Basic {}", credentials);
-        let url = format!("{}/api/data/get_key", server_name);
-        
-        // Step 1: Verify Server
-        let check_data = self.verify_pinepods_instance(&server_name).await?;
-        if !check_data.pinepods_instance {
-            return Err(anyhow!("Pinepods instance not found at specified server"));
-        }
-        
-        // Step 2: Get API key or MFA session token
-        let response = self.client
-            .get(&url)
-            .header("Authorization", &auth_header)
-            .send()
+    pub async fn verify_pinepods_instance(&self, server: &str) -> Result<()> {
+        let check: PinepodsCheckResponse = self
+            .json(
+                self.client.get(format!("{server}/api/pinepods_check")),
+                "server check",
+            )
             .await?;
-            
-        if !response.status().is_success() {
-            return Err(anyhow!("Failed to authenticate user. Incorrect credentials?"));
+        if !check.pinepods_instance {
+            bail!("that server isn't a PinePods instance");
         }
-        
-        let login_response: LoginResponse = response.json().await?;
-        
-        // Check if MFA is required
-        if login_response.status == "mfa_required" && login_response.mfa_required.unwrap_or(false) {
-            return Ok(AuthManagerResult::MfaRequired {
-                server_name,
-                username,
-                user_id: login_response.user_id.unwrap(),
-                mfa_session_token: login_response.mfa_session_token.unwrap(),
-            });
-        }
-        
-        // Normal flow - MFA not required, proceed with existing logic
-        let api_key = login_response.retrieved_key.ok_or_else(|| {
-            anyhow!("No API key returned from server")
-        })?;
-        
-        // Continue with existing verification steps
-        let result = self.complete_login_flow(server_name, username, password, api_key).await?;
-        Ok(AuthManagerResult::Success(result.0, result.1, result.2))
-    }
-
-    // Complete MFA verification during login and get full login data
-    pub async fn complete_mfa_login(&self, server_name: String, username: String, mfa_session_token: String, mfa_code: String) -> Result<(GetUserDetails, LoginServerRequest, GetApiDetails)> {
-        // Verify MFA and get API key
-        let mfa_response = self.call_verify_mfa_and_get_key(&server_name, mfa_session_token, mfa_code).await?;
-        
-        if !mfa_response.verified || mfa_response.status != "success" {
-            return Err(anyhow!("MFA verification failed"));
-        }
-        
-        let api_key = mfa_response.retrieved_key.ok_or_else(|| {
-            anyhow!("No API key returned after MFA verification")
-        })?;
-        
-        // Complete the login flow with the verified API key
-        self.complete_login_flow(server_name, username, "".to_string(), api_key).await
-    }
-
-    // Extracted common login completion logic
-    pub async fn complete_login_flow(&self, server_name: String, username: String, password: String, api_key: String) -> Result<(GetUserDetails, LoginServerRequest, GetApiDetails)> {
-        // Step 1: Verify the API key
-        let verify_response = self.call_verify_key(&server_name, &api_key).await?;
-        if verify_response.status != "success" {
-            return Err(anyhow!("API key verification failed"));
-        }
-        
-        // Step 2: Get user ID
-        let user_id_response = self.call_get_user_id(&server_name, &api_key).await?;
-        if user_id_response.status != "success" {
-            return Err(anyhow!("Failed to get user ID"));
-        }
-        
-        let login_request = LoginServerRequest {
-            server_name: server_name.clone(),
-            username: Some(username.clone()),
-            password: if password.is_empty() { None } else { Some(password) },
-            api_key: Some(api_key.clone()),
-        };
-        
-        // Step 3: Get user details
-        let user_details = self.call_get_user_details(
-            &server_name,
-            &api_key,
-            &user_id_response.retrieved_id.unwrap(),
-        ).await?;
-        
-        if user_details.Username.is_none() {
-            return Err(anyhow!("Failed to get user details"));
-        }
-        
-        // Step 4: Get server details
-        let server_details = self.call_get_api_config(&server_name, &api_key).await?;
-        if server_details.api_url.is_none() {
-            return Err(anyhow!("Failed to get server details"));
-        }
-        
-        Ok((user_details, login_request, server_details))
-    }
-
-    // Helper function to verify MFA and get API key
-    pub async fn call_verify_mfa_and_get_key(&self, server_name: &str, mfa_session_token: String, mfa_code: String) -> Result<VerifyMfaLoginResponse> {
-        let url = format!("{}/api/data/verify_mfa_and_get_key", server_name);
-        let body = VerifyMfaLoginRequest { mfa_session_token, mfa_code };
-
-        let response = self.client
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let response_body: VerifyMfaLoginResponse = response.json().await?;
-            Ok(response_body)
-        } else {
-            Err(anyhow!("MFA verification failed"))
-        }
-    }
-
-    // Helper function to verify API key
-    async fn call_verify_key(&self, server_name: &str, api_key: &str) -> Result<KeyVerification> {
-        let url = format!("{}/api/data/verify_key", server_name);
-        
-        let response = self.client
-            .get(&url)
-            .header("Api-Key", api_key)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let key_verify: KeyVerification = response.json().await?;
-            Ok(key_verify)
-        } else {
-            Err(anyhow!("API key verification failed"))
-        }
-    }
-
-    // Helper function to get user ID
-    async fn call_get_user_id(&self, server_name: &str, api_key: &str) -> Result<GetUserIdResponse> {
-        let url = format!("{}/api/data/get_user", server_name);
-
-        let response = self.client
-            .get(&url)
-            .header("Api-Key", api_key)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let user_id_response: GetUserIdResponse = response.json().await?;
-            Ok(user_id_response)
-        } else {
-            Err(anyhow!("Failed to get user ID"))
-        }
-    }
-
-    // Helper function to get user details
-    async fn call_get_user_details(&self, server_name: &str, api_key: &str, user_id: &i32) -> Result<GetUserDetails> {
-        let url = format!("{}/api/data/user_details_id/{}", server_name, user_id);
-        
-        let response = self.client
-            .get(&url)
-            .header("Api-Key", api_key)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let user_details: GetUserDetails = response.json().await?;
-            Ok(user_details)
-        } else {
-            Err(anyhow!("Failed to get user details"))
-        }
-    }
-
-    // Helper function to get API configuration
-    async fn call_get_api_config(&self, server_name: &str, api_key: &str) -> Result<GetApiDetails> {
-        let url = format!("{}/api/data/config", server_name);
-        
-        let response = self.client
-            .get(&url)
-            .header("Api-Key", api_key)
-            .send()
-            .await?;
-
-        if response.status().is_success() {
-            let config: GetApiDetails = response.json().await?;
-            Ok(config)
-        } else {
-            Err(anyhow!("Failed to get API configuration"))
-        }
-    }
-
-    // Check if this is the first login for the user
-    pub async fn call_first_login_done(&self, server_name: String, api_key: String, user_id: &i32) -> Result<bool> {
-        let url = format!("{}/api/data/first_login_done/{}", server_name, user_id);
-        let response = self.client
-            .get(&url)
-            .header("Content-Type", "application/json")
-            .header("Api-Key", &api_key)
-            .send()
-            .await?;
-            
-        if response.status().is_success() {
-            let response_body: FirstLoginResponse = response.json().await?;
-            Ok(response_body.FirstLogin)
-        } else {
-            Err(anyhow!("Failed to check first login status"))
-        }
-    }
-
-    // Check self-service status (needed for first admin setup)
-    pub async fn check_self_service_status(&self, server_name: &str) -> Result<(bool, bool)> {
-        let server_name = server_name.trim_end_matches('/');
-        let url = format!("{}/api/data/self_service_status", server_name);
-        
-        let response = self.client.get(&url).send().await?;
-
-        if response.status().is_success() {
-            let status_response: SelfServiceStatusResponse = response.json().await?;
-            Ok((status_response.status, status_response.first_admin_created))
-        } else {
-            Err(anyhow!("Failed to check self-service status"))
-        }
-    }
-
-    // Create first admin (for new installations)
-    pub async fn create_first_admin(&self, server_name: &str, request: CreateFirstAdminRequest) -> Result<CreateFirstAdminResponse> {
-        let url = format!("{}/api/data/create_first", server_name);
-        
-        let response = self.client
-            .post(&url)
-            .json(&request)
-            .send()
-            .await?;
-            
-        if response.status().is_success() {
-            let admin_response: CreateFirstAdminResponse = response.json().await?;
-            Ok(admin_response)
-        } else {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(anyhow!("Failed to create first admin: {}", error_text))
-        }
-    }
-
-    // Get timezone information
-    pub async fn get_time_info(&self, server_name: &str, api_key: &str, user_id: i32) -> Result<TimeInfo> {
-        let url = format!("{}/api/data/get_time_info", server_name);
-        
-        let response = self.client
-            .get(&url)
-            .header("Api-Key", api_key)
-            .query(&[("user_id", user_id.to_string())])
-            .send()
-            .await?;
-            
-        if response.status().is_success() {
-            let time_info: TimeInfo = response.json().await?;
-            Ok(time_info)
-        } else {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(anyhow!("Failed to get time info: {}", error_text))
-        }
-    }
-
-    // Setup timezone information
-    pub async fn setup_timezone_info(&self, server_name: &str, api_key: &str, timezone_info: TimeZoneInfo) -> Result<()> {
-        let url = format!("{}/api/data/setup_time_info", server_name);
-        
-        let response = self.client
-            .post(&url)
-            .header("Api-Key", api_key)
-            .json(&timezone_info)
-            .send()
-            .await?;
-            
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            let error_text = response.text().await.unwrap_or_else(|_| "Unknown error".to_string());
-            Err(anyhow!("Failed to setup timezone: {}", error_text))
-        }
-    }
-
-    // Save authentication state
-    pub async fn save_auth_state(&self, auth_state: &AuthState) -> Result<()> {
-        // Implementation for saving to config file
-        // This would typically save to ~/.config/pinepods-firewood/auth.json or similar
         Ok(())
     }
 
-    // Load authentication state
-    pub async fn load_auth_state(&self) -> Result<AuthState> {
-        // Implementation for loading from config file
-        // This would typically load from ~/.config/pinepods-firewood/auth.json or similar
-        Err(anyhow!("No saved authentication state"))
+    /// Returns `(self_service_enabled, first_admin_created)`.
+    pub async fn check_self_service_status(&self, server: &str) -> Result<(bool, bool)> {
+        let status: SelfServiceStatusResponse = self
+            .json(
+                self.client
+                    .get(format!("{server}/api/data/self_service_status")),
+                "self-service check",
+            )
+            .await?;
+        Ok((status.status, status.first_admin_created))
     }
+
+    pub async fn login(
+        &self,
+        server: &str,
+        username: &str,
+        password: &str,
+    ) -> Result<LoginOutcome> {
+        let credentials = STANDARD.encode(format!("{username}:{password}"));
+        let req = self
+            .client
+            .get(format!("{server}/api/data/get_key"))
+            .header("Authorization", format!("Basic {credentials}"));
+        let resp: LoginResponse = match self.json(req, "login").await {
+            Ok(r) => r,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => {
+                bail!("incorrect username or password")
+            }
+            Err(e) => return Err(e),
+        };
+
+        if resp.status == "mfa_required" && resp.mfa_required.unwrap_or(false) {
+            return match (resp.user_id, resp.mfa_session_token) {
+                (Some(user_id), Some(mfa_session_token)) => Ok(LoginOutcome::MfaRequired {
+                    user_id,
+                    mfa_session_token,
+                }),
+                _ => Err(anyhow!(
+                    "the server asked for MFA but didn't start an MFA session"
+                )),
+            };
+        }
+        resp.retrieved_key
+            .map(LoginOutcome::Key)
+            .ok_or_else(|| anyhow!("the server didn't return an API key"))
+    }
+
+    pub async fn verify_mfa(
+        &self,
+        server: &str,
+        mfa_session_token: String,
+        mfa_code: String,
+    ) -> Result<String> {
+        let body = VerifyMfaLoginRequest {
+            mfa_session_token,
+            mfa_code,
+        };
+        let req = self
+            .client
+            .post(format!("{server}/api/data/verify_mfa_and_get_key"))
+            .json(&body);
+        let resp: VerifyMfaLoginResponse = self.json(req, "MFA verification").await?;
+        if !resp.verified || resp.status != "success" {
+            bail!("that code wasn't accepted");
+        }
+        resp.retrieved_key
+            .ok_or_else(|| anyhow!("the server didn't return an API key"))
+    }
+
+    /// Fetches everything a session needs once we hold a key.
+    pub async fn load_account(
+        &self,
+        server: &str,
+        api_key: &str,
+    ) -> Result<(GetUserDetails, GetApiDetails)> {
+        self.verify_key(server, api_key).await?;
+        let user: GetUserIdResponse = self
+            .json(
+                self.authed(server, "/api/data/get_user", api_key),
+                "user lookup",
+            )
+            .await?;
+        let user_id = user
+            .retrieved_id
+            .ok_or_else(|| anyhow!("the server didn't return a user id"))?;
+        let details: GetUserDetails = self
+            .json(
+                self.authed(
+                    server,
+                    &format!("/api/data/user_details_id/{user_id}"),
+                    api_key,
+                ),
+                "user details",
+            )
+            .await?;
+        let config: GetApiDetails = self
+            .json(
+                self.authed(server, "/api/data/config", api_key),
+                "server config",
+            )
+            .await?;
+        Ok((details, config))
+    }
+
+    /// Fails with [`ApiError::Unauthorized`] if the key has been revoked.
+    pub async fn verify_key(&self, server: &str, api_key: &str) -> Result<()> {
+        let resp: KeyVerification = self
+            .json(
+                self.authed(server, "/api/data/verify_key", api_key),
+                "key check",
+            )
+            .await?;
+        if resp.status != "success" {
+            return Err(ApiError::Unauthorized.into());
+        }
+        Ok(())
+    }
+
+    pub async fn first_login_done(
+        &self,
+        server: &str,
+        api_key: &str,
+        user_id: i32,
+    ) -> Result<bool> {
+        let resp: FirstLoginResponse = self
+            .json(
+                self.authed(
+                    server,
+                    &format!("/api/data/first_login_done/{user_id}"),
+                    api_key,
+                ),
+                "first-login check",
+            )
+            .await?;
+        Ok(resp.FirstLogin)
+    }
+
+    pub async fn create_first_admin(
+        &self,
+        server: &str,
+        request: CreateFirstAdminRequest,
+    ) -> Result<()> {
+        let req = self
+            .client
+            .post(format!("{server}/api/data/create_first"))
+            .json(&request);
+        let _: CreateFirstAdminResponse = self.json(req, "creating the admin account").await?;
+        Ok(())
+    }
+
+    pub async fn setup_timezone_info(
+        &self,
+        server: &str,
+        api_key: &str,
+        info: TimeZoneInfo,
+    ) -> Result<()> {
+        let req = self
+            .client
+            .post(format!("{server}/api/data/setup_time_info"))
+            .header("Api-Key", api_key)
+            .json(&info);
+        let _: serde_json::Value = self.json(req, "saving time settings").await?;
+        Ok(())
+    }
+
+    fn authed(&self, server: &str, path: &str, api_key: &str) -> RequestBuilder {
+        self.client
+            .get(format!("{server}{path}"))
+            .header("Api-Key", api_key)
+    }
+}
+
+/// Hashes a new account's password the way the web client does; the server stores
+/// what it's sent as the hash.
+pub fn hash_password(password: &str) -> Result<String> {
+    use argon2::{Argon2, PasswordHasher};
+    let hash = Argon2::default()
+        .hash_password(password.as_bytes())
+        .map_err(|e| anyhow!("couldn't hash the password: {e}"))?;
+    Ok(hash.to_string())
 }

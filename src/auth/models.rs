@@ -1,20 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoginRequest {
-    pub username: String,
-    pub password: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LoginServerRequest {
-    pub server_name: String,
-    pub username: Option<String>,
-    pub password: Option<String>,
-    pub api_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct LoginResponse {
     pub status: String,
     pub retrieved_key: Option<String>,
@@ -48,9 +34,9 @@ pub struct FirstLoginResponse {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TimeInfo {
-    pub timezone: String,
-    pub hour_pref: i32,
-    pub date_format: String,
+    pub timezone: Option<String>,
+    pub hour_pref: Option<i32>,
+    pub date_format: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -60,8 +46,6 @@ pub struct GetUserDetails {
     pub Fullname: Option<String>,
     pub Username: Option<String>,
     pub Email: Option<String>,
-    pub Hashed_PW: Option<String>,
-    pub Salt: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -81,7 +65,7 @@ pub struct VerifyMfaLoginRequest {
     pub mfa_code: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct VerifyMfaLoginResponse {
     pub status: String,
     pub retrieved_key: Option<String>,
@@ -94,7 +78,7 @@ pub struct SelfServiceStatusResponse {
     pub first_admin_created: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 pub struct CreateFirstAdminRequest {
     pub username: String,
     pub password: String,
@@ -122,27 +106,25 @@ pub struct SetupTimeZoneInfoResponse {
     pub success: bool,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct TimeInfoResponse {
-    pub timezone: String,
-    pub hour_pref: i16,
-    pub date_format: String,
-}
-
-// Authentication state for storage
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// A logged-in session. `Debug` leaves out the API key so it can't end up in a log.
+#[derive(Clone)]
 pub struct AuthState {
     pub server_name: String,
     pub api_key: String,
     pub user_details: GetUserDetails,
     pub server_details: GetApiDetails,
-    pub login_request: LoginServerRequest,
 }
 
-// Session information
+impl std::fmt::Debug for AuthState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthState")
+            .field("server_name", &self.server_name)
+            .field("user_id", &self.user_details.UserID)
+            .finish_non_exhaustive()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub auth_state: AuthState,
-    pub is_first_login: bool,
-    pub timezone_configured: bool,
 }
