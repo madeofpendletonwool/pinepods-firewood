@@ -10,16 +10,20 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Beautiful TUI**: Full-featured terminal interface with intuitive navigation
 - **Podcast Browser**: Browse your subscribed podcasts with two-panel view
 - **Episode Management**: View recent, saved, queued, and downloaded episodes
-- **Audio Player**: Built-in player with play/pause, skip (±15s), volume control
+- **Audio Player**: Built-in player with play/pause, skip (±15s), speed and volume control
 - **Micro-Player**: Always-visible playback controls at bottom of every screen
 - **Search**: Find episodes and podcasts quickly
 - **Session Persistence**: Remembers your login between sessions (the API key is kept in the OS keychain)
 
 ### 🎧 **Audio Playback**
-- **Streaming Support**: Direct episode streaming from PinePods server
+- **Streaming**: Playback starts within a second or two, and seeking anywhere fetches just that part of the episode. Episodes your server has downloaded (and YouTube videos) play from the server's copy; everything else from the feed
 - **Playback Controls**: Play/pause, skip forward/backward, seek, volume
+- **Speed**: 0.5× to 3× without changing pitch, starting from each podcast's speed setting in PinePods
+- **Skips**: Jumps over ads and silence PinePods has detected (silence follows the podcast's trim-silence setting), and over a podcast's intro and outro skip times
+- **Queue**: When an episode ends it's marked played and the next one in your queue starts
 - **Progress Tracking**: Resumes where you left off and saves your position to the server while you listen
-- **Format Support**: Supports all audio formats via Symphonia decoder
+- **Reconnects**: Rides out short network drops and picks up where you were
+- **Formats**: MP3, AAC/M4A, FLAC, Ogg Vorbis and WAV
 
 ## 🚀 Installation
 
@@ -121,10 +125,10 @@ sudo cp target/release/pinepods_firewood /usr/local/bin/
 
 #### 🎵 **Player** *(Implemented)*
 - Full-screen player interface
-- Playback controls (play/pause/skip)
-- Progress bar with time display
-- Volume control
-- Episode artwork and metadata
+- **Space** play/pause, **←/→** skip, **↑/↓** volume, **s** stop
+- **[ / ]** slower/faster, **=** back to 1×
+- **t** toggles trim silence for the current podcast (saved to PinePods)
+- Progress bar with time display, buffering and skip notices
 
 #### 📝 **Queue** *(Planned)*
 - Manage episode queue
