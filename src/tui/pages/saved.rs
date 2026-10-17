@@ -7,10 +7,10 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
-use crate::api::{EpisodeKey, Api, Episode};
+use crate::api::{Api, Episode, EpisodeKey};
 use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
@@ -40,18 +40,18 @@ impl ScrollState {
             display_width,
         }
     }
-    
+
     fn update(&mut self, now: Instant) -> bool {
         // If text fits in display width, no scrolling needed
         if self.text_width <= self.display_width {
             return false;
         }
-        
+
         // Check if we're in a pause period
         if now < self.pause_until {
             return false;
         }
-        
+
         match self.direction {
             ScrollDirection::Paused => {
                 self.direction = ScrollDirection::Right;
@@ -76,15 +76,15 @@ impl ScrollState {
             }
         }
     }
-    
+
     fn get_display_text(&self, text: &str) -> String {
         if self.text_width <= self.display_width {
             return text.to_string();
         }
-        
+
         let chars: Vec<char> = text.chars().collect();
         let end_pos = (self.offset + self.display_width).min(chars.len());
-        
+
         if self.offset < chars.len() {
             chars[self.offset..end_pos].iter().collect()
         } else {
@@ -95,25 +95,25 @@ impl ScrollState {
 
 pub struct SavedPage {
     client: Api,
-    
+
     // Data
     saved_episodes: Vec<Episode>,
-    
+
     // UI State
     list_state: ListState,
     loading: bool,
     error_message: Option<String>,
-    
+
     // Animation
     last_update: Instant,
-    
+
     // Title scrolling animation
     scroll_states: HashMap<String, ScrollState>,
     last_scroll_update: Instant,
-    
+
     // Audio player
     audio_player: Option<Playback>,
-    
+
     // Theme management
     theme_manager: ThemeManager,
 }
@@ -122,7 +122,7 @@ impl SavedPage {
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        
+
         Self {
             client,
             saved_episodes: Vec::new(),
@@ -158,7 +158,7 @@ impl SavedPage {
                 tracing::info!("Loaded {} saved episodes", episodes.len());
                 self.saved_episodes = episodes;
                 self.loading = false;
-                
+
                 // Auto-select first episode if none selected
                 if !self.saved_episodes.is_empty() && self.list_state.selected().is_none() {
                     self.list_state.select(Some(0));
@@ -170,7 +170,7 @@ impl SavedPage {
                 return Err(e.into());
             }
         }
-        
+
         Ok(())
     }
 
@@ -178,15 +178,17 @@ impl SavedPage {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(selected) = self.list_state.selected()
-                    && selected < self.saved_episodes.len().saturating_sub(1) {
-                        self.list_state.select(Some(selected + 1));
-                    }
+                    && selected < self.saved_episodes.len().saturating_sub(1)
+                {
+                    self.list_state.select(Some(selected + 1));
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(selected) = self.list_state.selected()
-                    && selected > 0 {
-                        self.list_state.select(Some(selected - 1));
-                    }
+                    && selected > 0
+                {
+                    self.list_state.select(Some(selected - 1));
+                }
             }
             KeyCode::Enter => {
                 self.play_selected_episode().await?;
@@ -200,89 +202,103 @@ impl SavedPage {
             }
             _ => {}
         }
-        
+
         Ok(())
     }
 
     async fn play_selected_episode(&mut self) -> Result<()> {
         if let Some(selected) = self.list_state.selected()
-            && let Some(episode) = self.saved_episodes.get(selected) {
-                tracing::info!("Playing saved episode: {}", episode.episode_title);
-                
-                if let Some(ref mut audio_player) = self.audio_player {
-                    audio_player.play_episode(episode.clone())?;
-                    // No UI message needed - the player box will show loading state
-                } else {
-                    tracing::warn!("No audio player available");
-                    self.error_message = Some("Audio player not available".to_string());
-                }
+            && let Some(episode) = self.saved_episodes.get(selected)
+        {
+            tracing::info!("Playing saved episode: {}", episode.episode_title);
+
+            if let Some(ref mut audio_player) = self.audio_player {
+                audio_player.play_episode(episode.clone())?;
+                // No UI message needed - the player box will show loading state
+            } else {
+                tracing::warn!("No audio player available");
+                self.error_message = Some("Audio player not available".to_string());
             }
+        }
         Ok(())
     }
 
     async fn unsave_selected_episode(&mut self) -> Result<()> {
         if let Some(selected) = self.list_state.selected()
-            && let Some(episode) = self.saved_episodes.get(selected) {
-                if let episode_id @ 1.. = episode.episode_id {
-                    tracing::info!("Removing episode from saved: {}", episode.episode_title);
-                    
-                    let is_youtube = episode.is_youtube;
-                    match self.client.unsave_episode(EpisodeKey { episode_id, is_youtube }).await {
-                        Ok(_) => {
-                            // Remove from local list
-                            self.saved_episodes.remove(selected);
-                            
-                            // Adjust selection
-                            if self.saved_episodes.is_empty() {
-                                self.list_state.select(None);
-                            } else if selected >= self.saved_episodes.len() {
-                                self.list_state.select(Some(self.saved_episodes.len() - 1));
-                            }
-                            
-                            self.error_message = Some("✅ Episode removed from saved".to_string());
+            && let Some(episode) = self.saved_episodes.get(selected)
+        {
+            if let episode_id @ 1.. = episode.episode_id {
+                tracing::info!("Removing episode from saved: {}", episode.episode_title);
+
+                let is_youtube = episode.is_youtube;
+                match self
+                    .client
+                    .unsave_episode(EpisodeKey {
+                        episode_id,
+                        is_youtube,
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        // Remove from local list
+                        self.saved_episodes.remove(selected);
+
+                        // Adjust selection
+                        if self.saved_episodes.is_empty() {
+                            self.list_state.select(None);
+                        } else if selected >= self.saved_episodes.len() {
+                            self.list_state.select(Some(self.saved_episodes.len() - 1));
                         }
-                        Err(e) => {
-                            self.error_message = Some(format!("Failed to remove episode: {}", e));
-                        }
+
+                        self.error_message = Some("✅ Episode removed from saved".to_string());
                     }
-                } else {
-                    self.error_message = Some("Cannot remove episode: missing ID".to_string());
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to remove episode: {}", e));
+                    }
                 }
+            } else {
+                self.error_message = Some("Cannot remove episode: missing ID".to_string());
             }
+        }
         Ok(())
     }
 
     pub async fn update(&mut self) -> Result<()> {
         self.last_update = Instant::now();
-        
+
         // Update scrolling animation every 150ms
         let now = Instant::now();
         if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
             self.update_scroll_states(now);
             self.last_scroll_update = now;
         }
-        
+
         Ok(())
     }
-    
+
     fn update_scroll_states(&mut self, now: Instant) {
         // Update all scroll states
         for scroll_state in self.scroll_states.values_mut() {
             scroll_state.update(now);
         }
     }
-    
-    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+
+    fn get_or_create_scroll_state(
+        &mut self,
+        key: String,
+        text: &str,
+        display_width: usize,
+    ) -> &mut ScrollState {
         let text_width = text.chars().count();
-        
-        self.scroll_states.entry(key).or_insert_with(|| {
-            ScrollState::new(text_width, display_width)
-        })
+
+        self.scroll_states
+            .entry(key)
+            .or_insert_with(|| ScrollState::new(text_width, display_width))
     }
-    
+
     fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
         let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
-        
+
         // Update scroll state dimensions if text OR display width changed
         let text_width = text.chars().count();
         if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
@@ -292,10 +308,10 @@ impl SavedPage {
             scroll_state.direction = ScrollDirection::Paused;
             scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
         }
-        
+
         scroll_state.get_display_text(text)
     }
-    
+
     // Method to update theme from external source (like server sync)
     pub fn update_theme(&mut self, theme_name: &str) {
         self.theme_manager.set_theme(theme_name);
@@ -305,17 +321,17 @@ impl SavedPage {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(5),     // Episodes list
-                Constraint::Length(3),  // Footer with controls
+                Constraint::Min(5),    // Episodes list
+                Constraint::Length(3), // Footer with controls
             ])
             .split(area);
 
         // Render episodes list
         self.render_episodes_list(frame, chunks[0]);
-        
+
         // Render footer
         self.render_footer(frame, chunks[1]);
-        
+
         // Loading overlay
         if self.loading {
             self.render_loading_overlay(frame, area, "Loading saved episodes...");
@@ -335,7 +351,7 @@ impl SavedPage {
                         .border_type(BorderType::Rounded)
                         .title("⭐ Saved Episodes")
                         .border_style(Style::default().fg(theme_colors.warning))
-                        .title_style(Style::default().fg(theme_colors.warning))
+                        .title_style(Style::default().fg(theme_colors.warning)),
                 );
             frame.render_widget(empty, area);
             return;
@@ -344,27 +360,34 @@ impl SavedPage {
         // Pre-calculate scrolled titles to avoid borrowing issues
         let mut scrolled_titles = Vec::new();
         let available_width = area.width as usize;
-        
+
         // First collect the data we need to avoid borrowing conflicts
-        let episode_data: Vec<(usize, String, String, i64)> = self.saved_episodes
+        let episode_data: Vec<(usize, String, String, i64)> = self
+            .saved_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
-                let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast").to_string();
+                let podcast_name = episode
+                    .podcast_name
+                    .as_deref()
+                    .unwrap_or("Unknown Podcast")
+                    .to_string();
                 let title = episode.episode_title.clone();
                 let episode_id = episode.episode_id;
                 (index, podcast_name, title, episode_id)
             })
             .collect();
-        
+
         // Now we can safely call mutable methods
         for (index, podcast_name, title, episode_id) in episode_data {
             // Calculate available width for title (approximate)
             let podcast_width = podcast_name.chars().count();
             let status_width = 15; // Approximate width for status indicators
             let other_chars = 10; // " • " and padding
-            let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
-            
+            let title_max_width = available_width
+                .saturating_sub(podcast_width + status_width + other_chars)
+                .max(20);
+
             // Use scrolling for long titles
             let scroll_key = format!("saved_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
@@ -374,17 +397,21 @@ impl SavedPage {
         // Get theme colors after mutable operations
         let theme_colors = self.theme_manager.get_colors();
 
-        let items: Vec<ListItem> = self.saved_episodes
+        let items: Vec<ListItem> = self
+            .saved_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
                 let duration = format_duration(episode.episode_duration);
                 let pub_date = format_pub_date(&episode.episode_pub_date);
                 let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast");
-                
+
                 // Get pre-calculated scrolled title
-                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| episode.episode_title.clone());
-                
+                let displayed_title = scrolled_titles
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| episode.episode_title.clone());
+
                 // Status indicators
                 let mut indicators = Vec::new();
                 if episode.completed {
@@ -403,14 +430,25 @@ impl SavedPage {
                 let status = format!(" {}", indicators.join(" "));
 
                 let line1 = Line::from(vec![
-                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        displayed_title,
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
                     Span::styled(podcast_name, Style::default().fg(theme_colors.accent)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        format!(" • {}", pub_date),
+                        Style::default().fg(theme_colors.warning),
+                    ),
+                    Span::styled(
+                        format!(" • {}", duration),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -424,13 +462,13 @@ impl SavedPage {
                     .border_type(BorderType::Rounded)
                     .title("⭐ Saved Episodes")
                     .border_style(Style::default().fg(theme_colors.warning))
-                    .title_style(Style::default().fg(theme_colors.warning))
+                    .title_style(Style::default().fg(theme_colors.warning)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -439,24 +477,34 @@ impl SavedPage {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let controls = [("↑↓/jk", "Navigate"),
+        let controls = [
+            ("↑↓/jk", "Navigate"),
             ("Enter", "Play"),
             ("u", "Unsave"),
-            ("r", "Refresh")];
+            ("r", "Refresh"),
+        ];
 
         let footer_text: Vec<Span> = controls
             .iter()
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        *key,
+                        Style::default()
+                            .fg(theme_colors.primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {}", desc),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ];
-                
+
                 if i < controls.len() - 1 {
                     spans.push(Span::raw("  "));
                 }
-                
+
                 spans
             })
             .collect();
@@ -469,7 +517,7 @@ impl SavedPage {
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.border))
                     .title("🔧 Controls")
-                    .title_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent)),
             );
 
         frame.render_widget(footer, area);
@@ -482,13 +530,13 @@ impl SavedPage {
                 width: area.width.saturating_sub(4),
                 height: 1,
             };
-            
+
             let color = if error.starts_with("✅") || error.starts_with("🎵") {
                 theme_colors.success
             } else {
                 theme_colors.error
             };
-            
+
             let error_msg = Paragraph::new(error.as_str())
                 .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center);
@@ -519,14 +567,18 @@ impl SavedPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(theme_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             );
         frame.render_widget(loading, popup_area);
     }
@@ -536,7 +588,7 @@ fn format_duration(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
-    
+
     if hours > 0 {
         format!("{}:{:02}:{:02}", hours, minutes, secs)
     } else {

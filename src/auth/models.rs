@@ -92,7 +92,6 @@ pub struct CreateFirstAdminResponse {
     pub user_id: i32,
 }
 
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TimeZoneInfo {
     pub user_id: i32,

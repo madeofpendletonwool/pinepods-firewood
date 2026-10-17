@@ -1,20 +1,20 @@
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Tabs},
-    Frame,
 };
 use std::time::{Duration, Instant};
 
+use super::pages::*;
 use crate::api::Api;
 use crate::auth::SessionInfo;
 use crate::playback::Playback;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
-use super::pages::*;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AppTab {
@@ -86,25 +86,25 @@ impl AppTab {
             Self::Settings,
         ]
     }
-    
+
     pub fn ordered_tabs(settings_manager: &crate::settings::SettingsManager) -> Vec<Self> {
         let tab_order = settings_manager.tab_order();
         let mut ordered = Vec::new();
-        
+
         // Add tabs according to user's preferred order
         for tab_name in tab_order {
             if let Some(tab) = Self::from_name(tab_name) {
                 ordered.push(tab);
             }
         }
-        
+
         // Add any missing tabs (in case settings are incomplete)
         for tab in Self::all_tabs() {
             if !ordered.contains(&tab) {
                 ordered.push(tab);
             }
         }
-        
+
         ordered
     }
 }
@@ -115,10 +115,10 @@ pub struct TuiApp {
     session_info: SessionInfo,
     active_tab: AppTab,
     should_quit: bool,
-    
+
     // Audio player
     audio_player: Playback,
-    
+
     // Pages
     home_page: HomePage,
     podcasts_page: PodcastsPage,
@@ -129,29 +129,34 @@ pub struct TuiApp {
     downloads_page: DownloadsPage,
     search_page: SearchPage,
     settings_page: SettingsPage,
-    
+
     // UI state
     loading: bool,
     error_message: Option<String>,
     success_message: Option<String>,
     message_timeout: Option<Instant>,
-    
+
     // Tab scrolling state
     tab_scroll_offset: usize,
-    
+
     // Theme management
     theme_manager: ThemeManager,
-    
+
     // Settings management
     settings_manager: SettingsManager,
-    
+
     // Animation
     animation_frame: usize,
     last_animation_update: Instant,
 }
 
 impl TuiApp {
-    pub fn new(session_info: SessionInfo, client: Api, audio_player: Playback, settings_manager: SettingsManager) -> Self {
+    pub fn new(
+        session_info: SessionInfo,
+        client: Api,
+        audio_player: Playback,
+        settings_manager: SettingsManager,
+    ) -> Self {
         let mut theme_manager = ThemeManager::new();
         theme_manager.set_theme(settings_manager.theme_name());
         let skip_interval = Duration::from_secs(settings_manager.skip_interval());
@@ -241,7 +246,9 @@ impl TuiApp {
                 self.should_quit = true;
                 return Ok(());
             }
-            (KeyModifiers::NONE, KeyCode::Char(' ')) if !typing && self.active_tab != AppTab::Player => {
+            (KeyModifiers::NONE, KeyCode::Char(' '))
+                if !typing && self.active_tab != AppTab::Player =>
+            {
                 if let Err(e) = self.audio_player.toggle_play_pause() {
                     self.show_error_message(&format!("Failed to control playback: {}", e));
                 }
@@ -275,7 +282,9 @@ impl TuiApp {
             AppTab::Home => self.home_page.handle_input(key).await?,
             AppTab::Podcasts => self.podcasts_page.handle_input(key).await?,
             AppTab::Episodes => self.episodes_page.handle_input(key).await?,
-            AppTab::Player => { self.player_page.handle_input(key).await?; },
+            AppTab::Player => {
+                self.player_page.handle_input(key).await?;
+            }
             AppTab::Queue => self.queue_page.handle_input(key).await?,
             AppTab::Saved => self.saved_page.handle_input(key).await?,
             AppTab::Downloads => self.downloads_page.handle_input(key).await?,
@@ -283,7 +292,11 @@ impl TuiApp {
             AppTab::Settings => {
                 self.settings_page.handle_input(key).await?;
                 // Check if theme changed and sync it
-                let current_theme = self.settings_page.settings_manager().theme_name().to_string();
+                let current_theme = self
+                    .settings_page
+                    .settings_manager()
+                    .theme_name()
+                    .to_string();
                 if current_theme != self.theme_manager.get_theme_name() {
                     self.update_theme(&current_theme);
                     // Also update all other pages
@@ -304,7 +317,7 @@ impl TuiApp {
                         self.settings_manager = updated_settings;
                     }
                 }
-            },
+            }
         }
 
         Ok(())
@@ -319,11 +332,12 @@ impl TuiApp {
 
         // Clear expired messages
         if let Some(timeout) = self.message_timeout
-            && timeout.elapsed() >= Duration::from_secs(3) {
-                self.error_message = None;
-                self.success_message = None;
-                self.message_timeout = None;
-            }
+            && timeout.elapsed() >= Duration::from_secs(3)
+        {
+            self.error_message = None;
+            self.success_message = None;
+            self.message_timeout = None;
+        }
 
         // Update active page
         match self.active_tab {
@@ -377,10 +391,10 @@ impl TuiApp {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),  // Header with tabs
-                Constraint::Min(5),     // Content (minimum height to prevent overlap)
-                Constraint::Length(3),  // Micro-player
-                Constraint::Length(3),  // Footer with shortcuts
+                Constraint::Length(3), // Header with tabs
+                Constraint::Min(5),    // Content (minimum height to prevent overlap)
+                Constraint::Length(3), // Micro-player
+                Constraint::Length(3), // Footer with shortcuts
             ])
             .split(frame.area());
 
@@ -402,7 +416,7 @@ impl TuiApp {
 
         // Render micro-player
         self.render_micro_player(frame, main_layout[2]);
-        
+
         // Render footer
         self.render_footer(frame, main_layout[3]);
 
@@ -416,38 +430,41 @@ impl TuiApp {
 
         // Calculate how many tabs can fit based on terminal width
         let available_width = area.width.saturating_sub(2) as usize; // Account for borders only
-        
+
         // Calculate approximate width per tab (icon + space + title + shortcut + padding)
         let avg_tab_width = 14; // More accurate estimate: icon(2) + space(1) + title(6-8) + shortcut(2) + padding(2)
         let max_visible_tabs = (available_width / avg_tab_width).max(1).min(all_tabs.len());
-        
+
         // Simple scrolling: show a window of tabs based on scroll offset
         let visible_count = max_visible_tabs;
-        let active_index = all_tabs.iter().position(|t| *t == self.active_tab).unwrap_or(0);
-        
+        let active_index = all_tabs
+            .iter()
+            .position(|t| *t == self.active_tab)
+            .unwrap_or(0);
+
         // Adjust scroll offset to ensure active tab is visible
         let mut scroll_offset = self.tab_scroll_offset;
         let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
         let end_idx = (start_idx + visible_count).min(all_tabs.len());
-        
+
         // If active tab is outside the visible window, adjust scroll offset
         if active_index < start_idx {
             scroll_offset = active_index;
         } else if active_index >= end_idx {
             scroll_offset = active_index.saturating_sub(visible_count - 1);
         }
-        
+
         // Ensure scroll offset doesn't go beyond valid range
         let max_scroll = all_tabs.len().saturating_sub(visible_count);
         if scroll_offset > max_scroll {
             scroll_offset = max_scroll;
         }
-        
+
         // Update the stored scroll offset and recalculate
         self.tab_scroll_offset = scroll_offset;
         let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
         let end_idx = (start_idx + visible_count).min(all_tabs.len());
-        
+
         let visible_tabs = &all_tabs[start_idx..end_idx];
         let show_left_arrow = start_idx > 0;
         let show_right_arrow = end_idx < all_tabs.len();
@@ -460,7 +477,7 @@ impl TuiApp {
                 let icon = tab.icon();
                 let title = tab.title();
                 let shortcut = format!(" {}", actual_idx + 1);
-                
+
                 Line::from(vec![
                     Span::styled(icon, Style::default().fg(theme_colors.accent)),
                     Span::raw(" "),
@@ -472,17 +489,45 @@ impl TuiApp {
 
         // Create tabs widget with arrow indicators in title
         let tab_title = if show_left_arrow && show_right_arrow {
-            format!("◀ 🌲 Pinepods Firewood - {} ▶", 
-                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+            format!(
+                "◀ 🌲 Pinepods Firewood - {} ▶",
+                self.session_info
+                    .auth_state
+                    .user_details
+                    .Username
+                    .as_deref()
+                    .unwrap_or("User")
+            )
         } else if show_left_arrow {
-            format!("◀ 🌲 Pinepods Firewood - {} ", 
-                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+            format!(
+                "◀ 🌲 Pinepods Firewood - {} ",
+                self.session_info
+                    .auth_state
+                    .user_details
+                    .Username
+                    .as_deref()
+                    .unwrap_or("User")
+            )
         } else if show_right_arrow {
-            format!(" 🌲 Pinepods Firewood - {} ▶", 
-                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+            format!(
+                " 🌲 Pinepods Firewood - {} ▶",
+                self.session_info
+                    .auth_state
+                    .user_details
+                    .Username
+                    .as_deref()
+                    .unwrap_or("User")
+            )
         } else {
-            format!(" 🌲 Pinepods Firewood - {} ", 
-                   self.session_info.auth_state.user_details.Username.as_deref().unwrap_or("User"))
+            format!(
+                " 🌲 Pinepods Firewood - {} ",
+                self.session_info
+                    .auth_state
+                    .user_details
+                    .Username
+                    .as_deref()
+                    .unwrap_or("User")
+            )
         };
 
         // Find which visible tab is the active one
@@ -501,7 +546,7 @@ impl TuiApp {
                     .style(Style::default().fg(theme_colors.accent))
                     .border_style(Style::default().fg(theme_colors.accent))
                     .title(tab_title)
-                    .title_style(Style::default().fg(theme_colors.text))
+                    .title_style(Style::default().fg(theme_colors.text)),
             )
             .select(selected_index)
             .style(Style::default().fg(theme_colors.text_secondary))
@@ -509,7 +554,7 @@ impl TuiApp {
                 Style::default()
                     .fg(theme_colors.primary)
                     .bg(theme_colors.container)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             );
 
         frame.render_widget(tabs_widget, area);
@@ -518,14 +563,14 @@ impl TuiApp {
     fn render_micro_player(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
         let player_state = self.audio_player.get_state();
-        
+
         if let Some(ref episode) = player_state.current_episode {
             let layout = Layout::default()
                 .direction(Direction::Horizontal)
                 .constraints([
-                    Constraint::Percentage(40),  // Episode info
-                    Constraint::Percentage(30),  // Progress bar
-                    Constraint::Percentage(30),  // Controls and time
+                    Constraint::Percentage(40), // Episode info
+                    Constraint::Percentage(30), // Progress bar
+                    Constraint::Percentage(30), // Controls and time
                 ])
                 .split(area);
 
@@ -537,10 +582,23 @@ impl TuiApp {
             let episode_info = ratatui::widgets::Paragraph::new(vec![
                 Line::from(vec![
                     Span::styled("🎵 ", Style::default().fg(theme_colors.accent)),
-                    Span::styled(title_text.clone(), Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        title_text.clone(),
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     // Show loading indicator in title area if loading
-                    if matches!(player_state.playback_state, crate::playback::PlaybackState::Loading) {
-                        Span::styled(" (Loading...)", Style::default().fg(theme_colors.warning).add_modifier(Modifier::ITALIC))
+                    if matches!(
+                        player_state.playback_state,
+                        crate::playback::PlaybackState::Loading
+                    ) {
+                        Span::styled(
+                            " (Loading...)",
+                            Style::default()
+                                .fg(theme_colors.warning)
+                                .add_modifier(Modifier::ITALIC),
+                        )
                     } else {
                         Span::raw("")
                     },
@@ -554,13 +612,14 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             );
             frame.render_widget(episode_info, layout[0]);
 
             // Progress bar
             let progress = if player_state.total_duration.as_secs() > 0 {
-                player_state.current_position.as_secs_f64() / player_state.total_duration.as_secs_f64()
+                player_state.current_position.as_secs_f64()
+                    / player_state.total_duration.as_secs_f64()
             } else {
                 0.0
             };
@@ -570,9 +629,13 @@ impl TuiApp {
                     Block::default()
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme_colors.border))
+                        .border_style(Style::default().fg(theme_colors.border)),
                 )
-                .gauge_style(Style::default().fg(theme_colors.primary).bg(theme_colors.container))
+                .gauge_style(
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .bg(theme_colors.container),
+                )
                 .ratio(progress);
             frame.render_widget(progress_bar, layout[1]);
 
@@ -586,7 +649,7 @@ impl TuiApp {
                     // Animated loading spinner
                     let spinners = ["🔄", "🔃", "⟳", "⟲"];
                     spinners[self.animation_frame % spinners.len()]
-                },
+                }
                 crate::playback::PlaybackState::Stopped => "⏹️",
                 crate::playback::PlaybackState::Error(_) => "❌",
             };
@@ -595,12 +658,28 @@ impl TuiApp {
                 Line::from(vec![
                     Span::styled(status_icon, Style::default().fg(theme_colors.warning)),
                     Span::raw(" "),
-                    Span::styled(format!("{}/{}", current_time, total_time), Style::default().fg(theme_colors.text)),
+                    Span::styled(
+                        format!("{}/{}", current_time, total_time),
+                        Style::default().fg(theme_colors.text),
+                    ),
                 ]),
                 Line::from(vec![
-                    Span::styled("Space", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(" Play/Pause ", Style::default().fg(theme_colors.text_secondary)),
-                    Span::styled("4", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        "Space",
+                        Style::default()
+                            .fg(theme_colors.primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        " Play/Pause ",
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
+                    Span::styled(
+                        "4",
+                        Style::default()
+                            .fg(theme_colors.primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(" Player", Style::default().fg(theme_colors.text_secondary)),
                 ]),
             ])
@@ -609,13 +688,17 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             );
             frame.render_widget(controls, layout[2]);
         } else {
             // No episode playing
             let no_player = ratatui::widgets::Paragraph::new("No episode playing")
-                .style(Style::default().fg(theme_colors.text_secondary).add_modifier(Modifier::ITALIC))
+                .style(
+                    Style::default()
+                        .fg(theme_colors.text_secondary)
+                        .add_modifier(Modifier::ITALIC),
+                )
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
@@ -623,7 +706,7 @@ impl TuiApp {
                         .border_type(BorderType::Rounded)
                         .border_style(Style::default().fg(theme_colors.border))
                         .title("🎵 Player")
-                        .title_style(Style::default().fg(theme_colors.accent))
+                        .title_style(Style::default().fg(theme_colors.accent)),
                 );
             frame.render_widget(no_player, area);
         }
@@ -638,24 +721,37 @@ impl TuiApp {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let shortcuts = [("Tab", "Switch tabs"),
+        let shortcuts = [
+            ("Tab", "Switch tabs"),
             ("1-9", "Quick tab"),
             ("Ctrl+R", "Refresh"),
-            ("Ctrl+C/Q", "Quit")];
+            ("Ctrl+C/Q", "Quit"),
+        ];
 
         let footer_text: Vec<Span> = shortcuts
             .iter()
             .enumerate()
             .flat_map(|(i, (key, desc))| {
                 let mut spans = vec![
-                    Span::styled(*key, Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" {}", desc), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        *key,
+                        Style::default()
+                            .fg(theme_colors.primary)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {}", desc),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ];
-                
+
                 if i < shortcuts.len() - 1 {
-                    spans.push(Span::styled("  ", Style::default().fg(theme_colors.text_secondary)));
+                    spans.push(Span::styled(
+                        "  ",
+                        Style::default().fg(theme_colors.text_secondary),
+                    ));
                 }
-                
+
                 spans
             })
             .collect();
@@ -668,7 +764,7 @@ impl TuiApp {
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.border))
                     .title("🔧 Controls")
-                    .title_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent)),
             );
 
         frame.render_widget(footer, area);
@@ -678,7 +774,11 @@ impl TuiApp {
         let theme_colors = self.theme_manager.get_colors();
         let message = if let Some(error) = &self.error_message {
             Some((format!("❌ {}", error), theme_colors.error, "Error"))
-        } else { self.success_message.as_ref().map(|success| (format!("✅ {}", success), theme_colors.success, "Success")) };
+        } else {
+            self.success_message
+                .as_ref()
+                .map(|success| (format!("✅ {}", success), theme_colors.success, "Success"))
+        };
 
         if let Some((text, color, title)) = message {
             // Create a larger popup for better error display
@@ -686,7 +786,7 @@ impl TuiApp {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Percentage(20),
-                    Constraint::Length(8),  // Fixed height popup
+                    Constraint::Length(8), // Fixed height popup
                     Constraint::Percentage(20),
                 ])
                 .split(area)[1];
@@ -712,7 +812,7 @@ impl TuiApp {
                         .border_type(ratatui::widgets::BorderType::Rounded)
                         .title(format!("{} (Press any key to dismiss)", title))
                         .border_style(Style::default().fg(color))
-                        .style(Style::default().bg(theme_colors.container))
+                        .style(Style::default().bg(theme_colors.container)),
                 );
 
             frame.render_widget(message_widget, popup_area);
@@ -721,7 +821,7 @@ impl TuiApp {
 
     async fn refresh_current_page(&mut self) -> Result<()> {
         self.loading = true;
-        
+
         let result = match self.active_tab {
             AppTab::Home => self.home_page.refresh().await,
             AppTab::Podcasts => self.podcasts_page.refresh().await,
@@ -793,18 +893,21 @@ impl TuiApp {
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to fetch theme from server, using local settings: {}", e);
+                tracing::warn!(
+                    "Failed to fetch theme from server, using local settings: {}",
+                    e
+                );
                 // Continue with local theme - this is not a fatal error
             }
         }
-        
+
         // Initialize all pages
         self.home_page.initialize().await?;
         self.podcasts_page.initialize().await?;
         self.queue_page.initialize().await?;
         self.saved_page.initialize().await?;
         self.downloads_page.initialize().await?;
-        
+
         Ok(())
     }
 }

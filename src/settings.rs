@@ -63,7 +63,6 @@ impl Default for ThemeSettings {
     }
 }
 
-
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
@@ -93,7 +92,10 @@ impl SettingsManager {
         let settings = match Self::load_from_file(&settings_path) {
             Ok(settings) => settings,
             Err(e) => {
-                tracing::warn!("couldn't read {}, using defaults: {e:#}", settings_path.display());
+                tracing::warn!(
+                    "couldn't read {}, using defaults: {e:#}",
+                    settings_path.display()
+                );
                 AppSettings::default()
             }
         };
@@ -184,9 +186,13 @@ impl SettingsManager {
 /// default first.
 pub fn get_available_audio_devices() -> Vec<(String, String)> {
     let mut devices = vec![("default".to_string(), "System Default".to_string())];
-    devices.extend(crate::audio::engine::output_device_names().into_iter().map(|name| {
-        let label = crate::tui::text::truncate(&name, 40);
-        (name, label)
-    }));
+    devices.extend(
+        crate::audio::engine::output_device_names()
+            .into_iter()
+            .map(|name| {
+                let label = crate::tui::text::truncate(&name, 40);
+                (name, label)
+            }),
+    );
     devices
 }

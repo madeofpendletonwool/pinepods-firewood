@@ -21,24 +21,24 @@ enum InputMode {
 
 pub struct SearchPage {
     client: Api,
-    
+
     // Search state
     search_input: String,
     input_mode: InputMode,
     search_results: Vec<SearchResultItem>,
-    
+
     // UI State
     list_state: ListState,
     loading: bool,
     error_message: Option<String>,
     success_message: Option<String>,
-    
+
     // Animation
     last_update: Instant,
-    
+
     // Audio player
     audio_player: Option<Playback>,
-    
+
     // Theme management
     theme_manager: ThemeManager,
 }
@@ -47,7 +47,7 @@ impl SearchPage {
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        
+
         Self {
             client,
             search_input: String::new(),
@@ -96,13 +96,18 @@ impl SearchPage {
 
         match self.client.search(&self.search_input).await {
             Ok(results) => {
-                tracing::info!("Search found {} results for '{}'", results.len(), self.search_input);
+                tracing::info!(
+                    "Search found {} results for '{}'",
+                    results.len(),
+                    self.search_input
+                );
                 self.search_results = results;
                 self.loading = false;
-                
+
                 if !self.search_results.is_empty() {
                     self.list_state.select(Some(0));
-                    self.success_message = Some(format!("Found {} results", self.search_results.len()));
+                    self.success_message =
+                        Some(format!("Found {} results", self.search_results.len()));
                 } else {
                     self.list_state.select(None);
                     self.success_message = Some("No results found".to_string());
@@ -114,7 +119,7 @@ impl SearchPage {
                 return Err(e.into());
             }
         }
-        
+
         Ok(())
     }
 
@@ -133,15 +138,17 @@ impl SearchPage {
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
                         if let Some(selected) = self.list_state.selected()
-                            && selected < self.search_results.len().saturating_sub(1) {
-                                self.list_state.select(Some(selected + 1));
-                            }
+                            && selected < self.search_results.len().saturating_sub(1)
+                        {
+                            self.list_state.select(Some(selected + 1));
+                        }
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
                         if let Some(selected) = self.list_state.selected()
-                            && selected > 0 {
-                                self.list_state.select(Some(selected - 1));
-                            }
+                            && selected > 0
+                        {
+                            self.list_state.select(Some(selected - 1));
+                        }
                     }
                     KeyCode::Enter => {
                         self.play_selected_result().await?;
@@ -159,42 +166,41 @@ impl SearchPage {
                     _ => {}
                 }
             }
-            InputMode::Editing => {
-                match key.code {
-                    KeyCode::Enter => {
-                        self.input_mode = InputMode::Normal;
-                        self.perform_search().await?;
-                    }
-                    KeyCode::Char(c) => {
-                        self.search_input.push(c);
-                    }
-                    KeyCode::Backspace => {
-                        self.search_input.pop();
-                    }
-                    KeyCode::Esc => {
-                        self.input_mode = InputMode::Normal;
-                    }
-                    _ => {}
+            InputMode::Editing => match key.code {
+                KeyCode::Enter => {
+                    self.input_mode = InputMode::Normal;
+                    self.perform_search().await?;
                 }
-            }
+                KeyCode::Char(c) => {
+                    self.search_input.push(c);
+                }
+                KeyCode::Backspace => {
+                    self.search_input.pop();
+                }
+                KeyCode::Esc => {
+                    self.input_mode = InputMode::Normal;
+                }
+                _ => {}
+            },
         }
-        
+
         Ok(())
     }
 
     async fn play_selected_result(&mut self) -> Result<()> {
         if let Some(selected) = self.list_state.selected()
-            && let Some(result) = self.search_results.get(selected) {
-                tracing::info!("Playing search result: {}", result.episode_title);
-                
-                if let Some(ref mut audio_player) = self.audio_player {
-                    audio_player.play_episode(result.episode.clone())?;
-                    // No UI message needed - the player box will show loading state
-                } else {
-                    tracing::warn!("No audio player available");
-                    self.error_message = Some("Audio player not available".to_string());
-                }
+            && let Some(result) = self.search_results.get(selected)
+        {
+            tracing::info!("Playing search result: {}", result.episode_title);
+
+            if let Some(ref mut audio_player) = self.audio_player {
+                audio_player.play_episode(result.episode.clone())?;
+                // No UI message needed - the player box will show loading state
+            } else {
+                tracing::warn!("No audio player available");
+                self.error_message = Some("Audio player not available".to_string());
             }
+        }
         Ok(())
     }
 
@@ -202,7 +208,7 @@ impl SearchPage {
         self.last_update = Instant::now();
         Ok(())
     }
-    
+
     // Method to update theme from external source (like server sync)
     pub fn update_theme(&mut self, theme_name: &str) {
         self.theme_manager.set_theme(theme_name);
@@ -220,10 +226,10 @@ impl SearchPage {
 
         // Search input
         self.render_search_input(frame, main_layout[0]);
-        
+
         // Results list
         self.render_results_list(frame, main_layout[1]);
-        
+
         // Status/help
         self.render_status(frame, main_layout[2]);
     }
@@ -251,16 +257,14 @@ impl SearchPage {
             &self.search_input
         };
 
-        let input = Paragraph::new(display_text)
-            .style(input_style)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title(title)
-                    .title_style(Style::default().fg(theme_colors.accent))
-                    .border_style(border_style)
-            );
+        let input = Paragraph::new(display_text).style(input_style).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(title)
+                .title_style(Style::default().fg(theme_colors.accent))
+                .border_style(border_style),
+        );
 
         frame.render_widget(input, area);
 
@@ -289,18 +293,19 @@ impl SearchPage {
                         .border_type(BorderType::Rounded)
                         .title("🔍 Search Results")
                         .title_style(Style::default().fg(theme_colors.accent))
-                        .border_style(Style::default().fg(theme_colors.border))
+                        .border_style(Style::default().fg(theme_colors.border)),
                 );
             frame.render_widget(empty, area);
             return;
         }
 
-        let items: Vec<ListItem> = self.search_results
+        let items: Vec<ListItem> = self
+            .search_results
             .iter()
             .map(|result| {
                 let duration = format_duration(result.episode_duration);
                 let pub_date = format_pub_date(&result.episode_pub_date);
-                
+
                 // Status indicators
                 let mut indicators = Vec::new();
                 if result.completed {
@@ -325,21 +330,36 @@ impl SearchPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(&result.episode_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        &result.episode_title,
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(result.podcast_name.as_deref().unwrap_or_default(), Style::default().fg(theme_colors.accent)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        result.podcast_name.as_deref().unwrap_or_default(),
+                        Style::default().fg(theme_colors.accent),
+                    ),
+                    Span::styled(
+                        format!(" • {}", pub_date),
+                        Style::default().fg(theme_colors.warning),
+                    ),
+                    Span::styled(
+                        format!(" • {}", duration),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ]);
 
                 // Third line with description (truncated)
                 let description = truncate_text(&result.episode_description, 80);
-                let line3 = Line::from(vec![
-                    Span::styled(description, Style::default().fg(theme_colors.text_secondary)),
-                ]);
+                let line3 = Line::from(vec![Span::styled(
+                    description,
+                    Style::default().fg(theme_colors.text_secondary),
+                )]);
 
                 ListItem::new(Text::from(vec![line1, line2, line3]))
             })
@@ -352,13 +372,13 @@ impl SearchPage {
                     .border_type(BorderType::Rounded)
                     .title(format!("🔍 Search Results ({})", self.search_results.len()))
                     .title_style(Style::default().fg(theme_colors.accent))
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -395,7 +415,7 @@ impl SearchPage {
                     .border_type(BorderType::Rounded)
                     .title("🔧 Controls")
                     .title_style(Style::default().fg(theme_colors.accent))
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             );
         frame.render_widget(help, layout[0]);
 
@@ -417,7 +437,7 @@ impl SearchPage {
                     .border_type(BorderType::Rounded)
                     .title("📊 Status")
                     .title_style(Style::default().fg(theme_colors.accent))
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             );
         frame.render_widget(status, layout[1]);
     }
@@ -445,14 +465,18 @@ impl SearchPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(theme_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             );
         frame.render_widget(loading, popup_area);
     }
@@ -462,7 +486,7 @@ fn format_duration(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
-    
+
     if hours > 0 {
         format!("{}:{:02}:{:02}", hours, minutes, secs)
     } else {

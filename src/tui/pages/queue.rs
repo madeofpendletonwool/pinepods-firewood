@@ -1,16 +1,14 @@
 use anyhow::Result;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{
-        Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap
-    },
-    Frame,
+    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::api::{Api, EpisodeKey, QueueItem};
 use crate::playback::Playback;
@@ -42,18 +40,18 @@ impl ScrollState {
             display_width,
         }
     }
-    
+
     fn update(&mut self, now: Instant) -> bool {
         // If text fits in display width, no scrolling needed
         if self.text_width <= self.display_width {
             return false;
         }
-        
+
         // Check if we're in a pause period
         if now < self.pause_until {
             return false;
         }
-        
+
         match self.direction {
             ScrollDirection::Paused => {
                 self.direction = ScrollDirection::Right;
@@ -78,15 +76,15 @@ impl ScrollState {
             }
         }
     }
-    
+
     fn get_display_text(&self, text: &str) -> String {
         if self.text_width <= self.display_width {
             return text.to_string();
         }
-        
+
         let chars: Vec<char> = text.chars().collect();
         let end_pos = (self.offset + self.display_width).min(chars.len());
-        
+
         if self.offset < chars.len() {
             chars[self.offset..end_pos].iter().collect()
         } else {
@@ -98,24 +96,24 @@ impl ScrollState {
 pub struct QueuePage {
     client: Api,
     audio_player: Option<Playback>,
-    
+
     // Data
     queue_items: Vec<QueueItem>,
-    
+
     // UI State
     list_state: ListState,
     selected_item: usize,
     loading: bool,
     error_message: Option<String>,
-    
+
     // Actions
     show_actions: bool,
     selected_action: usize,
-    
+
     // Title scrolling animation
     scroll_states: HashMap<String, ScrollState>,
     last_scroll_update: Instant,
-    
+
     // Theme management
     theme_manager: ThemeManager,
 }
@@ -124,7 +122,7 @@ impl QueuePage {
     pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        
+
         Self {
             client,
             audio_player: None,
@@ -152,7 +150,7 @@ impl QueuePage {
         match self.client.get_queue().await {
             Ok(items) => {
                 self.queue_items = items;
-                
+
                 // Reset selection if needed
                 if self.selected_item >= self.queue_items.len() {
                     self.selected_item = 0;
@@ -162,7 +160,7 @@ impl QueuePage {
                 } else {
                     self.list_state.select(Some(self.selected_item));
                 }
-                
+
                 self.loading = false;
             }
             Err(e) => {
@@ -183,17 +181,19 @@ impl QueuePage {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
                 if let Some(selected) = self.list_state.selected()
-                    && selected < self.queue_items.len().saturating_sub(1) {
-                        self.list_state.select(Some(selected + 1));
-                        self.selected_item = selected + 1;
-                    }
+                    && selected < self.queue_items.len().saturating_sub(1)
+                {
+                    self.list_state.select(Some(selected + 1));
+                    self.selected_item = selected + 1;
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(selected) = self.list_state.selected()
-                    && selected > 0 {
-                        self.list_state.select(Some(selected - 1));
-                        self.selected_item = selected - 1;
-                    }
+                    && selected > 0
+                {
+                    self.list_state.select(Some(selected - 1));
+                    self.selected_item = selected - 1;
+                }
             }
             KeyCode::Enter => {
                 self.play_selected();
@@ -257,28 +257,36 @@ impl QueuePage {
             KeyCode::Enter => {
                 if let Some(item) = self.queue_items.get(self.selected_item) {
                     match self.selected_action {
-                        0 => { // Play
+                        0 => {
+                            // Play
                             self.play_selected();
                         }
-                        1 => { // Remove
+                        1 => {
+                            // Remove
                             self.remove_from_queue(item.episode_id).await?;
                         }
-                        2 => { // Move to top
+                        2 => {
+                            // Move to top
                             self.move_to_top(item.episode_id).await?;
                         }
-                        3 => { // Move to bottom
+                        3 => {
+                            // Move to bottom
                             self.move_to_bottom(item.episode_id).await?;
                         }
-                        4 => { // Save episode
+                        4 => {
+                            // Save episode
                             self.save_episode(item.key()).await?;
                         }
-                        5 => { // Download
+                        5 => {
+                            // Download
                             self.download_episode(item.key()).await?;
                         }
-                        6 => { // Move up one position
+                        6 => {
+                            // Move up one position
                             self.move_up_one_position(item.episode_id).await?;
                         }
-                        7 => { // Move down one position
+                        7 => {
+                            // Move down one position
                             self.move_down_one_position(item.episode_id).await?;
                         }
                         _ => {}
@@ -302,30 +310,35 @@ impl QueuePage {
             self.update_scroll_states(now);
             self.last_scroll_update = now;
         }
-        
+
         // Auto-refresh every minute
         // TODO: Implement auto-refresh logic
         Ok(())
     }
-    
+
     fn update_scroll_states(&mut self, now: Instant) {
         // Update all scroll states
         for scroll_state in self.scroll_states.values_mut() {
             scroll_state.update(now);
         }
     }
-    
-    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+
+    fn get_or_create_scroll_state(
+        &mut self,
+        key: String,
+        text: &str,
+        display_width: usize,
+    ) -> &mut ScrollState {
         let text_width = text.chars().count();
-        
-        self.scroll_states.entry(key).or_insert_with(|| {
-            ScrollState::new(text_width, display_width)
-        })
+
+        self.scroll_states
+            .entry(key)
+            .or_insert_with(|| ScrollState::new(text_width, display_width))
     }
-    
+
     fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
         let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
-        
+
         // Update scroll state dimensions if text OR display width changed
         let text_width = text.chars().count();
         if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
@@ -335,10 +348,10 @@ impl QueuePage {
             scroll_state.direction = ScrollDirection::Paused;
             scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
         }
-        
+
         scroll_state.get_display_text(text)
     }
-    
+
     // Method to update theme from external source (like server sync)
     pub fn update_theme(&mut self, theme_name: &str) {
         self.theme_manager.set_theme(theme_name);
@@ -349,7 +362,9 @@ impl QueuePage {
     }
 
     fn play_selected(&mut self) {
-        let (Some(item), Some(player)) = (self.queue_items.get(self.selected_item), &self.audio_player) else {
+        let (Some(item), Some(player)) =
+            (self.queue_items.get(self.selected_item), &self.audio_player)
+        else {
             return;
         };
         if let Err(e) = player.play_episode(item.episode.clone()) {
@@ -358,11 +373,17 @@ impl QueuePage {
     }
 
     fn position_of(&self, episode_id: i64) -> Option<usize> {
-        self.queue_items.iter().position(|item| item.episode_id == episode_id)
+        self.queue_items
+            .iter()
+            .position(|item| item.episode_id == episode_id)
     }
 
     /// Sends a new order to the server, built by `reorder` from the current one.
-    async fn reorder(&mut self, what: &str, reorder: impl FnOnce(&mut Vec<EpisodeKey>)) -> Result<()> {
+    async fn reorder(
+        &mut self,
+        what: &str,
+        reorder: impl FnOnce(&mut Vec<EpisodeKey>),
+    ) -> Result<()> {
         let mut order: Vec<EpisodeKey> = self.queue_items.iter().map(|item| item.key()).collect();
         reorder(&mut order);
         match self.client.reorder_queue(&order).await {
@@ -373,7 +394,12 @@ impl QueuePage {
     }
 
     /// Moves the item at `from` to `to` and keeps the cursor on it.
-    async fn move_item(&mut self, episode_id: i64, to: impl FnOnce(usize, usize) -> usize, what: &str) -> Result<()> {
+    async fn move_item(
+        &mut self,
+        episode_id: i64,
+        to: impl FnOnce(usize, usize) -> usize,
+        what: &str,
+    ) -> Result<()> {
         let Some(from) = self.position_of(episode_id) else {
             return Ok(());
         };
@@ -392,7 +418,10 @@ impl QueuePage {
     }
 
     async fn remove_from_queue(&mut self, episode_id: i64) -> Result<()> {
-        let Some(key) = self.position_of(episode_id).map(|i| self.queue_items[i].key()) else {
+        let Some(key) = self
+            .position_of(episode_id)
+            .map(|i| self.queue_items[i].key())
+        else {
             return Ok(());
         };
         match self.client.remove_from_queue(key).await {
@@ -412,7 +441,8 @@ impl QueuePage {
 
     /// The server has no shuffle endpoint, so shuffle here and send the new order.
     async fn shuffle_queue(&mut self) -> Result<()> {
-        self.reorder("shuffle the queue", |order| shuffle(order)).await
+        self.reorder("shuffle the queue", |order| shuffle(order))
+            .await
     }
 
     async fn move_to_top(&mut self, episode_id: i64) -> Result<()> {
@@ -420,15 +450,22 @@ impl QueuePage {
     }
 
     async fn move_to_bottom(&mut self, episode_id: i64) -> Result<()> {
-        self.move_item(episode_id, |_, len| len.saturating_sub(1), "move to bottom").await
+        self.move_item(episode_id, |_, len| len.saturating_sub(1), "move to bottom")
+            .await
     }
 
     async fn move_up_one_position(&mut self, episode_id: i64) -> Result<()> {
-        self.move_item(episode_id, |from, _| from.saturating_sub(1), "move up").await
+        self.move_item(episode_id, |from, _| from.saturating_sub(1), "move up")
+            .await
     }
 
     async fn move_down_one_position(&mut self, episode_id: i64) -> Result<()> {
-        self.move_item(episode_id, |from, len| (from + 1).min(len.saturating_sub(1)), "move down").await
+        self.move_item(
+            episode_id,
+            |from, len| (from + 1).min(len.saturating_sub(1)),
+            "move down",
+        )
+        .await
     }
 
     async fn save_episode(&mut self, key: EpisodeKey) -> Result<()> {
@@ -459,8 +496,8 @@ impl QueuePage {
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(0),     // Queue list
-                Constraint::Length(4),  // Help text
+                Constraint::Min(0),    // Queue list
+                Constraint::Length(4), // Help text
             ])
             .split(area);
 
@@ -485,9 +522,10 @@ impl QueuePage {
         // Pre-calculate scrolled titles to avoid borrowing issues
         let mut scrolled_titles = Vec::new();
         let available_width = area.width as usize;
-        
+
         // First collect the data we need to avoid borrowing conflicts
-        let item_data: Vec<(usize, String, String, i64)> = self.queue_items
+        let item_data: Vec<(usize, String, String, i64)> = self
+            .queue_items
             .iter()
             .enumerate()
             .map(|(index, item)| {
@@ -497,31 +535,37 @@ impl QueuePage {
                 (index, podcast_name, title, episode_id)
             })
             .collect();
-        
+
         // Now we can safely call mutable methods
         for (index, podcast_name, title, episode_id) in item_data {
             // Calculate available width for title (approximate)
             let podcast_width = podcast_name.chars().count();
             let status_width = 20; // Approximate width for status indicators
             let other_chars = 10; // " • " and padding
-            let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
-            
+            let title_max_width = available_width
+                .saturating_sub(podcast_width + status_width + other_chars)
+                .max(20);
+
             // Use scrolling for long titles
             let scroll_key = format!("queue_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
             scrolled_titles.push(displayed_title);
         }
 
-        let items: Vec<ListItem> = self.queue_items
+        let items: Vec<ListItem> = self
+            .queue_items
             .iter()
             .enumerate()
             .map(|(index, item)| {
                 let duration = format_duration(item.episode_duration);
                 let pub_date = format_pub_date(&item.episode_pub_date);
-                
+
                 // Get pre-calculated scrolled title
-                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| item.episode_title.clone());
-                
+                let displayed_title = scrolled_titles
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| item.episode_title.clone());
+
                 // Status indicators
                 let mut indicators = Vec::new();
                 indicators.push(format!("#{}", index + 1));
@@ -542,24 +586,44 @@ impl QueuePage {
 
                 let theme_colors = self.theme_manager.get_colors();
                 let line1 = Line::from(vec![
-                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        displayed_title,
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(item.podcast_name.as_deref().unwrap_or_default(), Style::default().fg(theme_colors.accent)),
-                    Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        item.podcast_name.as_deref().unwrap_or_default(),
+                        Style::default().fg(theme_colors.accent),
+                    ),
+                    Span::styled(
+                        format!(" • {}", pub_date),
+                        Style::default().fg(theme_colors.warning),
+                    ),
+                    Span::styled(
+                        format!(" • {}", duration),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
             })
             .collect();
 
-        let total_duration: i64 = self.queue_items.iter().map(|item| item.episode_duration).sum();
-        let title = format!("Queue ({} episodes, {})", 
-                          self.queue_items.len(),
-                          format_duration(total_duration));
+        let total_duration: i64 = self
+            .queue_items
+            .iter()
+            .map(|item| item.episode_duration)
+            .sum();
+        let title = format!(
+            "Queue ({} episodes, {})",
+            self.queue_items.len(),
+            format_duration(total_duration)
+        );
 
         let theme_colors = self.theme_manager.get_colors();
         let list = List::new(items)
@@ -570,13 +634,13 @@ impl QueuePage {
                     .title(format!("📝 {}", title))
                     .title_alignment(Alignment::Center)
                     .border_style(Style::default().fg(theme_colors.primary))
-                    .title_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -586,17 +650,42 @@ impl QueuePage {
     fn render_empty_queue(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
         let empty_text = vec![
-            Line::from(vec![Span::styled("📝 Your queue is empty", Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))]),
+            Line::from(vec![Span::styled(
+                "📝 Your queue is empty",
+                Style::default()
+                    .fg(theme_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            )]),
             Line::from(""),
-            Line::from(vec![Span::styled("Add episodes to your queue from:", Style::default().fg(theme_colors.text))]),
-            Line::from(vec![Span::styled("• Episode lists", Style::default().fg(theme_colors.text_secondary))]),
-            Line::from(vec![Span::styled("• Search results", Style::default().fg(theme_colors.text_secondary))]),
-            Line::from(vec![Span::styled("• Podcast pages", Style::default().fg(theme_colors.text_secondary))]),
+            Line::from(vec![Span::styled(
+                "Add episodes to your queue from:",
+                Style::default().fg(theme_colors.text),
+            )]),
+            Line::from(vec![Span::styled(
+                "• Episode lists",
+                Style::default().fg(theme_colors.text_secondary),
+            )]),
+            Line::from(vec![Span::styled(
+                "• Search results",
+                Style::default().fg(theme_colors.text_secondary),
+            )]),
+            Line::from(vec![Span::styled(
+                "• Podcast pages",
+                Style::default().fg(theme_colors.text_secondary),
+            )]),
             Line::from(""),
             Line::from(vec![
                 Span::styled("Press ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("'a'", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" on any episode to add it to your queue", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled(
+                    "'a'",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " on any episode to add it to your queue",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
             ]),
         ];
 
@@ -620,29 +709,97 @@ impl QueuePage {
         let theme_colors = self.theme_manager.get_colors();
         let help_text = vec![
             Line::from(vec![
-                Span::styled("Enter", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" Play  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("Space", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Actions  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("r", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Remove  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("c", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Space",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Actions  ",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
+                Span::styled(
+                    "r",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Remove  ",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
+                Span::styled(
+                    "c",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" Clear  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("s", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "s",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" Shuffle", Style::default().fg(theme_colors.text_secondary)),
             ]),
             Line::from(vec![
-                Span::styled("t", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Move to top  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("b", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Move to bottom  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("u", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Move up one  ", Style::default().fg(theme_colors.text_secondary)),
-                Span::styled("d", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
-                Span::styled(" Move down one", Style::default().fg(theme_colors.text_secondary)),
+                Span::styled(
+                    "t",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Move to top  ",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
+                Span::styled(
+                    "b",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Move to bottom  ",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
+                Span::styled(
+                    "u",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Move up one  ",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
+                Span::styled(
+                    "d",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " Move down one",
+                    Style::default().fg(theme_colors.text_secondary),
+                ),
             ]),
             Line::from(vec![
-                Span::styled("F5", Style::default().fg(theme_colors.primary).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "F5",
+                    Style::default()
+                        .fg(theme_colors.primary)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" Refresh", Style::default().fg(theme_colors.text_secondary)),
             ]),
         ];
@@ -699,7 +856,9 @@ impl QueuePage {
             .enumerate()
             .map(|(i, action)| {
                 let style = if i == self.selected_action {
-                    Style::default().fg(theme_colors.warning).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme_colors.warning)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme_colors.text)
                 };
@@ -716,13 +875,13 @@ impl QueuePage {
                     .title_alignment(Alignment::Center)
                     .border_style(Style::default().fg(theme_colors.accent))
                     .title_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.primary)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -740,7 +899,7 @@ impl QueuePage {
                     .border_type(BorderType::Rounded)
                     .title("Loading")
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .title_style(Style::default().fg(theme_colors.accent))
+                    .title_style(Style::default().fg(theme_colors.accent)),
             );
 
         frame.render_widget(loading_text, area);
@@ -758,7 +917,7 @@ impl QueuePage {
                     .border_type(BorderType::Rounded)
                     .title("❌ Error")
                     .border_style(Style::default().fg(theme_colors.error))
-                    .title_style(Style::default().fg(theme_colors.error))
+                    .title_style(Style::default().fg(theme_colors.error)),
             );
 
         frame.render_widget(error_text, area);
