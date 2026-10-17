@@ -1,12 +1,4 @@
-use anyhow::Result;
 use ratatui::style::Color;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ThemeResponse {
-    pub theme: String,
-}
 
 #[derive(Debug, Clone)]
 pub struct ThemeColors {
@@ -484,7 +476,7 @@ impl ThemeColors {
             "wildberries" => Self::wildberries(),
             "hot dog stand - my eyes" => Self::hot_dog_stand(),
             _ => {
-                log::warn!("Unknown theme '{}', falling back to light", theme_name);
+                tracing::warn!("Unknown theme '{}', falling back to light", theme_name);
                 Self::light()
             }
         }
@@ -511,17 +503,10 @@ impl ThemeManager {
         Self::default()
     }
 
-    pub async fn fetch_theme_from_server(client: &crate::api::PinepodsClient, user_id: i32) -> Result<String> {
-        let url = format!("/api/data/get_theme/{}", user_id);
-        let response: ThemeResponse = client.authenticated_get(&url).await?;
-        log::info!("Fetched theme from server: {}", response.theme);
-        Ok(response.theme)
-    }
-
     pub fn set_theme(&mut self, theme_name: &str) {
         self.theme_name = theme_name.to_string();
         self.current_theme = ThemeColors::from_name(theme_name);
-        log::info!("Theme set to: {}", theme_name);
+        tracing::info!("Theme set to: {}", theme_name);
     }
 
     pub fn get_colors(&self) -> &ThemeColors {

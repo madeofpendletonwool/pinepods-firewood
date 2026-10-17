@@ -1,17 +1,17 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
-use crate::api::{PinepodsClient, Podcast, PodcastEpisode, Episode};
-use crate::audio::AudioPlayer;
+use crate::api::{Api, Podcast, Episode};
+use crate::playback::Playback;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
 
@@ -101,11 +101,11 @@ enum FocusPanel {
 }
 
 pub struct PodcastsPage {
-    client: PinepodsClient,
+    client: Api,
     
     // Data
     podcasts: Vec<Podcast>,
-    selected_podcast_episodes: Vec<PodcastEpisode>,
+    selected_podcast_episodes: Vec<Episode>,
     
     // UI State
     podcast_list_state: ListState,
@@ -124,7 +124,7 @@ pub struct PodcastsPage {
     last_scroll_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
     
     // Settings
     settings_manager: SettingsManager,
@@ -134,12 +134,12 @@ pub struct PodcastsPage {
 }
 
 impl PodcastsPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));
         
         let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
-            log::error!("Failed to create settings manager: {}", e);
+            tracing::error!("Failed to create settings manager: {}", e);
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
         
@@ -163,7 +163,7 @@ impl PodcastsPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -181,14 +181,14 @@ impl PodcastsPage {
 
         match self.client.get_podcasts().await {
             Ok(podcasts) => {
-                log::info!("Loaded {} podcasts", podcasts.len());
+                tracing::info!("Loaded {} podcasts", podcasts.len());
                 self.podcasts = podcasts;
                 self.loading = false;
                 
                 // Auto-select first podcast and load its episodes
                 if !self.podcasts.is_empty() {
                     self.podcast_list_state.select(Some(0));
-                    if let Some(podcast) = self.podcasts.get(0) {
+                    if let Some(podcast) = self.podcasts.first() {
                         self.load_podcast_episodes(podcast.podcastid).await?;
                     }
                 }
@@ -196,7 +196,7 @@ impl PodcastsPage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load podcasts: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -210,15 +210,19 @@ impl PodcastsPage {
         self.episode_list_state.select(Some(0));
 
         match self.client.get_podcast_episodes(podcast_id).await {
-            Ok(episodes) => {
-                log::info!("Loaded {} episodes for podcast {}", episodes.len(), podcast_id);
+            Ok(mut episodes) => {
+                tracing::debug!("loaded {} episodes for podcast {}", episodes.len(), podcast_id);
+                // This endpoint leaves out the podcast id; playback needs it.
+                for episode in &mut episodes {
+                    episode.podcast_id.get_or_insert(podcast_id);
+                }
                 self.selected_podcast_episodes = episodes;
                 self.loading_episodes = false;
             }
             Err(e) => {
                 self.error_message = Some(format!("Failed to load episodes: {}", e));
                 self.loading_episodes = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -250,62 +254,55 @@ impl PodcastsPage {
             KeyCode::Down | KeyCode::Char('j') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected < self.podcasts.len().saturating_sub(1) {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected < self.podcasts.len().saturating_sub(1) {
                                 self.podcast_list_state.select(Some(selected + 1));
                                 
                                 // Auto-load episodes if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts.get(selected + 1) {
+                                if self.settings_manager.auto_load_episodes()
+                                    && let Some(podcast) = self.podcasts.get(selected + 1) {
                                         let _ = self.load_podcast_episodes(podcast.podcastid).await;
                                     }
-                                }
                             }
-                        }
                     }
                     FocusPanel::Episodes => {
-                        if let Some(selected) = self.episode_list_state.selected() {
-                            if selected < self.selected_podcast_episodes.len().saturating_sub(1) {
+                        if let Some(selected) = self.episode_list_state.selected()
+                            && selected < self.selected_podcast_episodes.len().saturating_sub(1) {
                                 self.episode_list_state.select(Some(selected + 1));
                             }
-                        }
                     }
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected > 0 {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected > 0 {
                                 self.podcast_list_state.select(Some(selected - 1));
                                 
                                 // Auto-load episodes if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts.get(selected - 1) {
+                                if self.settings_manager.auto_load_episodes()
+                                    && let Some(podcast) = self.podcasts.get(selected - 1) {
                                         let _ = self.load_podcast_episodes(podcast.podcastid).await;
                                     }
-                                }
                             }
-                        }
                     }
                     FocusPanel::Episodes => {
-                        if let Some(selected) = self.episode_list_state.selected() {
-                            if selected > 0 {
+                        if let Some(selected) = self.episode_list_state.selected()
+                            && selected > 0 {
                                 self.episode_list_state.select(Some(selected - 1));
                             }
-                        }
                     }
                 }
             }
             KeyCode::Enter => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if let Some(podcast) = self.podcasts.get(selected) {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && let Some(podcast) = self.podcasts.get(selected) {
                                 self.load_podcast_episodes(podcast.podcastid).await?;
                                 self.focused_panel = FocusPanel::Episodes;
                             }
-                        }
                     }
                     FocusPanel::Episodes => {
                         self.play_selected_episode().await?;
@@ -322,21 +319,18 @@ impl PodcastsPage {
     }
 
     async fn play_selected_episode(&mut self) -> Result<()> {
-        if let Some(selected) = self.episode_list_state.selected() {
-            if let Some(episode) = self.selected_podcast_episodes.get(selected) {
-                log::info!("Playing episode: {}", episode.episode_title);
+        if let Some(selected) = self.episode_list_state.selected()
+            && let Some(episode) = self.selected_podcast_episodes.get(selected) {
+                tracing::info!("Playing episode: {}", episode.episode_title);
                 
                 if let Some(ref mut audio_player) = self.audio_player {
-                    // Convert PodcastEpisode to Episode for the audio player
-                    let episode_for_player: Episode = episode.clone().into();
-                    audio_player.play_episode(episode_for_player)?;
+                    audio_player.play_episode(episode.clone())?;
                     // No UI message needed - the player box will show loading state
                 } else {
-                    log::warn!("No audio player available");
+                    tracing::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());
                 }
             }
-        }
         Ok(())
     }
 
@@ -444,7 +438,7 @@ impl PodcastsPage {
             .collect();
         
         // Now we can safely call mutable methods
-        for (index, name, author, podcast_id) in podcast_data {
+        for (index, name, _author, podcast_id) in podcast_data {
             // Use much more of the available width for podcast name
             // The second line has author info, so the first line can use most of the width
             let name_max_width = available_width.saturating_sub(8).max(30); // Just leave room for borders/padding
@@ -551,7 +545,7 @@ impl PodcastsPage {
         let available_width = area.width as usize;
         
         // First collect the data we need to avoid borrowing conflicts
-        let episode_data: Vec<(usize, String, Option<i64>)> = self.selected_podcast_episodes
+        let episode_data: Vec<(usize, String, i64)> = self.selected_podcast_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
@@ -570,7 +564,7 @@ impl PodcastsPage {
             let title_max_width = available_width.saturating_sub(status_width + 6).max(40); // Leave room for status + padding
             
             // Use scrolling for long episode titles
-            let scroll_key = format!("episode_{}_{}", index, episode_id.unwrap_or(0));
+            let scroll_key = format!("episode_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
             scrolled_titles.push(displayed_title);
         }

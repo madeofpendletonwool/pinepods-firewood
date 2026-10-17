@@ -1,8 +1,8 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
         Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap
@@ -12,7 +12,8 @@ use ratatui::{
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
-use crate::api::{PinepodsClient, QueueItem};
+use crate::api::{Api, EpisodeKey, QueueItem};
+use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone)]
@@ -95,7 +96,8 @@ impl ScrollState {
 }
 
 pub struct QueuePage {
-    client: PinepodsClient,
+    client: Api,
+    audio_player: Option<Playback>,
     
     // Data
     queue_items: Vec<QueueItem>,
@@ -119,12 +121,13 @@ pub struct QueuePage {
 }
 
 impl QueuePage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
         Self {
             client,
+            audio_player: None,
             queue_items: Vec::new(),
             list_state,
             selected_item: 0,
@@ -149,7 +152,6 @@ impl QueuePage {
         match self.client.get_queue().await {
             Ok(items) => {
                 self.queue_items = items;
-                self.queue_items.sort_by_key(|item| item.queue_position);
                 
                 // Reset selection if needed
                 if self.selected_item >= self.queue_items.len() {
@@ -166,7 +168,7 @@ impl QueuePage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load queue: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
 
@@ -180,26 +182,21 @@ impl QueuePage {
 
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected < self.queue_items.len().saturating_sub(1) {
+                if let Some(selected) = self.list_state.selected()
+                    && selected < self.queue_items.len().saturating_sub(1) {
                         self.list_state.select(Some(selected + 1));
                         self.selected_item = selected + 1;
                     }
-                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected > 0 {
+                if let Some(selected) = self.list_state.selected()
+                    && selected > 0 {
                         self.list_state.select(Some(selected - 1));
                         self.selected_item = selected - 1;
                     }
-                }
             }
             KeyCode::Enter => {
-                if let Some(item) = self.queue_items.get(self.selected_item) {
-                    // TODO: Play selected episode
-                    println!("Playing: {}", item.episode_title);
-                }
+                self.play_selected();
             }
             KeyCode::Char(' ') => {
                 self.show_actions = true;
@@ -261,7 +258,7 @@ impl QueuePage {
                 if let Some(item) = self.queue_items.get(self.selected_item) {
                     match self.selected_action {
                         0 => { // Play
-                            println!("Playing: {}", item.episode_title);
+                            self.play_selected();
                         }
                         1 => { // Remove
                             self.remove_from_queue(item.episode_id).await?;
@@ -273,10 +270,10 @@ impl QueuePage {
                             self.move_to_bottom(item.episode_id).await?;
                         }
                         4 => { // Save episode
-                            self.save_episode(item.episode_id).await?;
+                            self.save_episode(item.key()).await?;
                         }
                         5 => { // Download
-                            self.download_episode(item.episode_id).await?;
+                            self.download_episode(item.key()).await?;
                         }
                         6 => { // Move up one position
                             self.move_up_one_position(item.episode_id).await?;
@@ -347,138 +344,103 @@ impl QueuePage {
         self.theme_manager.set_theme(theme_name);
     }
 
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
+        self.audio_player = Some(audio_player);
+    }
+
+    fn play_selected(&mut self) {
+        let (Some(item), Some(player)) = (self.queue_items.get(self.selected_item), &self.audio_player) else {
+            return;
+        };
+        if let Err(e) = player.play_episode(item.episode.clone()) {
+            self.error_message = Some(format!("Failed to play: {}", e));
+        }
+    }
+
+    fn position_of(&self, episode_id: i64) -> Option<usize> {
+        self.queue_items.iter().position(|item| item.episode_id == episode_id)
+    }
+
+    /// Sends a new order to the server, built by `reorder` from the current one.
+    async fn reorder(&mut self, what: &str, reorder: impl FnOnce(&mut Vec<EpisodeKey>)) -> Result<()> {
+        let mut order: Vec<EpisodeKey> = self.queue_items.iter().map(|item| item.key()).collect();
+        reorder(&mut order);
+        match self.client.reorder_queue(&order).await {
+            Ok(()) => self.refresh().await?,
+            Err(e) => self.error_message = Some(format!("Failed to {what}: {e}")),
+        }
+        Ok(())
+    }
+
+    /// Moves the item at `from` to `to` and keeps the cursor on it.
+    async fn move_item(&mut self, episode_id: i64, to: impl FnOnce(usize, usize) -> usize, what: &str) -> Result<()> {
+        let Some(from) = self.position_of(episode_id) else {
+            return Ok(());
+        };
+        let to = to(from, self.queue_items.len());
+        if to == from {
+            return Ok(());
+        }
+        self.reorder(what, |order| {
+            let key = order.remove(from);
+            order.insert(to, key);
+        })
+        .await?;
+        self.selected_item = to.min(self.queue_items.len().saturating_sub(1));
+        self.list_state.select(Some(self.selected_item));
+        Ok(())
+    }
+
     async fn remove_from_queue(&mut self, episode_id: i64) -> Result<()> {
-        let is_youtube = self.queue_items.iter()
-            .find(|item| item.episode_id == episode_id)
-            .map(|item| item.is_youtube)
-            .unwrap_or(false);
-            
-        match self.client.remove_from_queue(episode_id, is_youtube).await {
-            Ok(_) => {
-                self.refresh().await?;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to remove from queue: {}", e));
-            }
+        let Some(key) = self.position_of(episode_id).map(|i| self.queue_items[i].key()) else {
+            return Ok(());
+        };
+        match self.client.remove_from_queue(key).await {
+            Ok(()) => self.refresh().await?,
+            Err(e) => self.error_message = Some(format!("Failed to remove from queue: {}", e)),
         }
         Ok(())
     }
 
     async fn clear_queue(&mut self) -> Result<()> {
         match self.client.clear_queue().await {
-            Ok(_) => {
-                self.refresh().await?;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to clear queue: {}", e));
-            }
+            Ok(()) => self.refresh().await?,
+            Err(e) => self.error_message = Some(format!("Failed to clear queue: {}", e)),
         }
         Ok(())
     }
 
+    /// The server has no shuffle endpoint, so shuffle here and send the new order.
     async fn shuffle_queue(&mut self) -> Result<()> {
-        match self.client.shuffle_queue().await {
-            Ok(_) => {
-                self.refresh().await?;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to shuffle queue: {}", e));
-            }
-        }
-        Ok(())
+        self.reorder("shuffle the queue", |order| shuffle(order)).await
     }
 
     async fn move_to_top(&mut self, episode_id: i64) -> Result<()> {
-        match self.client.move_to_top_of_queue(episode_id).await {
-            Ok(_) => {
-                self.refresh().await?;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to move to top: {}", e));
-            }
-        }
-        Ok(())
+        self.move_item(episode_id, |_, _| 0, "move to top").await
     }
 
     async fn move_to_bottom(&mut self, episode_id: i64) -> Result<()> {
-        match self.client.move_to_bottom_of_queue(episode_id).await {
-            Ok(_) => {
-                self.refresh().await?;
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to move to bottom: {}", e));
-            }
-        }
-        Ok(())
+        self.move_item(episode_id, |_, len| len.saturating_sub(1), "move to bottom").await
     }
 
     async fn move_up_one_position(&mut self, episode_id: i64) -> Result<()> {
-        // Check if we can move up (not at the top)
-        if let Some(current_selected) = self.list_state.selected() {
-            if current_selected > 0 {
-                match self.client.move_up_one_position(episode_id).await {
-                    Ok(_) => {
-                        self.refresh().await?;
-                        // Move cursor up to follow the episode that moved up
-                        let new_position = current_selected - 1;
-                        self.list_state.select(Some(new_position));
-                        self.selected_item = new_position;
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("Failed to move up: {}", e));
-                    }
-                }
-            }
-        }
-        Ok(())
+        self.move_item(episode_id, |from, _| from.saturating_sub(1), "move up").await
     }
 
     async fn move_down_one_position(&mut self, episode_id: i64) -> Result<()> {
-        // Check if we can move down (not at the bottom)
-        if let Some(current_selected) = self.list_state.selected() {
-            if current_selected < self.queue_items.len().saturating_sub(1) {
-                match self.client.move_down_one_position(episode_id).await {
-                    Ok(_) => {
-                        self.refresh().await?;
-                        // Move cursor down to follow the episode that moved down
-                        let new_position = current_selected + 1;
-                        self.list_state.select(Some(new_position));
-                        self.selected_item = new_position;
-                    }
-                    Err(e) => {
-                        self.error_message = Some(format!("Failed to move down: {}", e));
-                    }
-                }
-            }
+        self.move_item(episode_id, |from, len| (from + 1).min(len.saturating_sub(1)), "move down").await
+    }
+
+    async fn save_episode(&mut self, key: EpisodeKey) -> Result<()> {
+        if let Err(e) = self.client.save_episode(key).await {
+            self.error_message = Some(format!("Failed to save episode: {}", e));
         }
         Ok(())
     }
 
-    async fn save_episode(&mut self, episode_id: i64) -> Result<()> {
-        let is_youtube = self.queue_items.iter()
-            .find(|item| item.episode_id == episode_id)
-            .map(|item| item.is_youtube)
-            .unwrap_or(false);
-            
-        match self.client.save_episode(episode_id, is_youtube).await {
-            Ok(_) => {
-                // Show success message
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to save episode: {}", e));
-            }
-        }
-        Ok(())
-    }
-
-    async fn download_episode(&mut self, episode_id: i64) -> Result<()> {
-        match self.client.download_episode(episode_id).await {
-            Ok(_) => {
-                // Show success message
-            }
-            Err(e) => {
-                self.error_message = Some(format!("Failed to download episode: {}", e));
-            }
+    async fn download_episode(&mut self, key: EpisodeKey) -> Result<()> {
+        if let Err(e) = self.client.download_episode(key).await {
+            self.error_message = Some(format!("Failed to download episode: {}", e));
         }
         Ok(())
     }
@@ -529,7 +491,7 @@ impl QueuePage {
             .iter()
             .enumerate()
             .map(|(index, item)| {
-                let podcast_name = item.podcast_name.clone();
+                let podcast_name = item.podcast_name.clone().unwrap_or_default();
                 let title = item.episode_title.clone();
                 let episode_id = item.episode_id;
                 (index, podcast_name, title, episode_id)
@@ -562,7 +524,7 @@ impl QueuePage {
                 
                 // Status indicators
                 let mut indicators = Vec::new();
-                indicators.push(format!("#{}", item.queue_position)); // Queue position
+                indicators.push(format!("#{}", index + 1));
                 if item.completed {
                     indicators.push("✅".to_string());
                 } else if item.listen_duration.unwrap_or(0) > 0 {
@@ -585,7 +547,7 @@ impl QueuePage {
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(&item.podcast_name, Style::default().fg(theme_colors.accent)),
+                    Span::styled(item.podcast_name.as_deref().unwrap_or_default(), Style::default().fg(theme_colors.accent)),
                     Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
                     Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);
@@ -821,5 +783,17 @@ fn format_pub_date(date_str: &str) -> String {
         date_part.to_string()
     } else {
         date_str.to_string()
+    }
+}
+
+/// Fisher–Yates with std's randomly seeded hasher, to avoid a dependency for one call.
+fn shuffle<T>(items: &mut [T]) {
+    use std::hash::{BuildHasher, Hasher};
+    let state = std::collections::hash_map::RandomState::new();
+    for i in (1..items.len()).rev() {
+        let mut hasher = state.build_hasher();
+        hasher.write_usize(i);
+        let j = (hasher.finish() % (i as u64 + 1)) as usize;
+        items.swap(i, j);
     }
 }

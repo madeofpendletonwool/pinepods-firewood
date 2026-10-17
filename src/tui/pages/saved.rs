@@ -1,17 +1,17 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
-use crate::api::{PinepodsClient, Episode};
-use crate::audio::AudioPlayer;
+use crate::api::{EpisodeKey, Api, Episode};
+use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone)]
@@ -94,7 +94,7 @@ impl ScrollState {
 }
 
 pub struct SavedPage {
-    client: PinepodsClient,
+    client: Api,
     
     // Data
     saved_episodes: Vec<Episode>,
@@ -112,14 +112,14 @@ pub struct SavedPage {
     last_scroll_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
     
     // Theme management
     theme_manager: ThemeManager,
 }
 
 impl SavedPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
@@ -137,7 +137,7 @@ impl SavedPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -153,9 +153,9 @@ impl SavedPage {
         self.loading = true;
         self.error_message = None;
 
-        match self.client.get_saved_episodes().await {
+        match self.client.get_saved().await {
             Ok(episodes) => {
-                log::info!("Loaded {} saved episodes", episodes.len());
+                tracing::info!("Loaded {} saved episodes", episodes.len());
                 self.saved_episodes = episodes;
                 self.loading = false;
                 
@@ -167,7 +167,7 @@ impl SavedPage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load saved episodes: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -177,18 +177,16 @@ impl SavedPage {
     pub async fn handle_input(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected < self.saved_episodes.len().saturating_sub(1) {
+                if let Some(selected) = self.list_state.selected()
+                    && selected < self.saved_episodes.len().saturating_sub(1) {
                         self.list_state.select(Some(selected + 1));
                     }
-                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected > 0 {
+                if let Some(selected) = self.list_state.selected()
+                    && selected > 0 {
                         self.list_state.select(Some(selected - 1));
                     }
-                }
             }
             KeyCode::Enter => {
                 self.play_selected_episode().await?;
@@ -207,30 +205,29 @@ impl SavedPage {
     }
 
     async fn play_selected_episode(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(episode) = self.saved_episodes.get(selected) {
-                log::info!("Playing saved episode: {}", episode.episode_title);
+        if let Some(selected) = self.list_state.selected()
+            && let Some(episode) = self.saved_episodes.get(selected) {
+                tracing::info!("Playing saved episode: {}", episode.episode_title);
                 
                 if let Some(ref mut audio_player) = self.audio_player {
                     audio_player.play_episode(episode.clone())?;
                     // No UI message needed - the player box will show loading state
                 } else {
-                    log::warn!("No audio player available");
+                    tracing::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());
                 }
             }
-        }
         Ok(())
     }
 
     async fn unsave_selected_episode(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(episode) = self.saved_episodes.get(selected) {
-                if let Some(episode_id) = episode.episode_id {
-                    log::info!("Removing episode from saved: {}", episode.episode_title);
+        if let Some(selected) = self.list_state.selected()
+            && let Some(episode) = self.saved_episodes.get(selected) {
+                if let episode_id @ 1.. = episode.episode_id {
+                    tracing::info!("Removing episode from saved: {}", episode.episode_title);
                     
-                    let is_youtube = episode.is_youtube.unwrap_or(false);
-                    match self.client.unsave_episode(episode_id, is_youtube).await {
+                    let is_youtube = episode.is_youtube;
+                    match self.client.unsave_episode(EpisodeKey { episode_id, is_youtube }).await {
                         Ok(_) => {
                             // Remove from local list
                             self.saved_episodes.remove(selected);
@@ -252,7 +249,6 @@ impl SavedPage {
                     self.error_message = Some("Cannot remove episode: missing ID".to_string());
                 }
             }
-        }
         Ok(())
     }
 
@@ -350,7 +346,7 @@ impl SavedPage {
         let available_width = area.width as usize;
         
         // First collect the data we need to avoid borrowing conflicts
-        let episode_data: Vec<(usize, String, String, Option<i64>)> = self.saved_episodes
+        let episode_data: Vec<(usize, String, String, i64)> = self.saved_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
@@ -370,7 +366,7 @@ impl SavedPage {
             let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
             
             // Use scrolling for long titles
-            let scroll_key = format!("saved_{}_{}", index, episode_id.unwrap_or(0));
+            let scroll_key = format!("saved_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
             scrolled_titles.push(displayed_title);
         }
@@ -391,16 +387,16 @@ impl SavedPage {
                 
                 // Status indicators
                 let mut indicators = Vec::new();
-                if episode.completed.unwrap_or(false) {
+                if episode.completed {
                     indicators.push("✅");
                 } else if episode.listen_duration.unwrap_or(0) > 0 {
                     indicators.push("▶️");
                 }
                 indicators.push("⭐"); // Always show saved indicator
-                if episode.queued.unwrap_or(false) {
+                if episode.queued {
                     indicators.push("📝");
                 }
-                if episode.downloaded.unwrap_or(false) {
+                if episode.downloaded {
                     indicators.push("📥");
                 }
 
@@ -443,12 +439,10 @@ impl SavedPage {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let controls = vec![
-            ("↑↓/jk", "Navigate"),
+        let controls = [("↑↓/jk", "Navigate"),
             ("Enter", "Play"),
             ("u", "Unsave"),
-            ("r", "Refresh"),
-        ];
+            ("r", "Refresh")];
 
         let footer_text: Vec<Span> = controls
             .iter()

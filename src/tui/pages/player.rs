@@ -1,30 +1,32 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Gauge, Paragraph, Wrap},
 };
 use std::time::Duration;
 
-use crate::audio::{AudioPlayer, AudioPlayerState, PlaybackState};
+use crate::playback::{Playback, PlayerState, PlaybackState};
 use crate::api::Episode;
 use crate::theme::ThemeManager;
 
 pub struct PlayerPage {
-    audio_player: AudioPlayer,
-    last_state: AudioPlayerState,
+    audio_player: Playback,
+    last_state: PlayerState,
+    skip_interval: Duration,
     
     // Theme management
     theme_manager: ThemeManager,
 }
 
 impl PlayerPage {
-    pub fn new(audio_player: AudioPlayer) -> Self {
+    pub fn new(audio_player: Playback, skip_interval: Duration) -> Self {
         Self {
             last_state: audio_player.get_state(),
+            skip_interval,
             audio_player,
             theme_manager: ThemeManager::new(),
         }
@@ -36,10 +38,10 @@ impl PlayerPage {
                 self.audio_player.toggle_play_pause()?;
             }
             KeyCode::Right => {
-                self.audio_player.skip_forward(Duration::from_secs(15))?;
+                self.audio_player.skip_forward(self.skip_interval)?;
             }
             KeyCode::Left => {
-                self.audio_player.skip_backward(Duration::from_secs(15))?;
+                self.audio_player.skip_backward(self.skip_interval)?;
             }
             KeyCode::Up => {
                 let current_volume = self.last_state.volume;
@@ -123,7 +125,7 @@ impl PlayerPage {
         frame.render_widget(title, area);
     }
 
-    fn render_episode_info(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+    fn render_episode_info(&self, frame: &mut Frame, area: Rect, state: &PlayerState) {
         let theme_colors = self.theme_manager.get_colors();
         let content = if let Some(ref episode) = state.current_episode {
             let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast");
@@ -167,7 +169,7 @@ impl PlayerPage {
         frame.render_widget(episode_info, area);
     }
 
-    fn render_progress(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+    fn render_progress(&self, frame: &mut Frame, area: Rect, state: &PlayerState) {
         let theme_colors = self.theme_manager.get_colors();
         let progress = if state.total_duration.as_secs() > 0 {
             state.current_position.as_secs_f64() / state.total_duration.as_secs_f64()
@@ -191,7 +193,7 @@ impl PlayerPage {
         frame.render_widget(progress_bar, area);
     }
 
-    fn render_time_info(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+    fn render_time_info(&self, frame: &mut Frame, area: Rect, state: &PlayerState) {
         let theme_colors = self.theme_manager.get_colors();
         let current_time = Self::format_duration(state.current_position);
         let total_time = Self::format_duration(state.total_duration);
@@ -215,7 +217,7 @@ impl PlayerPage {
         frame.render_widget(time_info, area);
     }
 
-    fn render_controls(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+    fn render_controls(&self, frame: &mut Frame, area: Rect, state: &PlayerState) {
         let theme_colors = self.theme_manager.get_colors();
         let controls_text = vec![
             Line::from(vec![
@@ -251,7 +253,7 @@ impl PlayerPage {
         frame.render_widget(controls, area);
     }
 
-    fn render_status(&self, frame: &mut Frame, area: Rect, state: &AudioPlayerState) {
+    fn render_status(&self, frame: &mut Frame, area: Rect, state: &PlayerState) {
         let theme_colors = self.theme_manager.get_colors();
         let status_text = match &state.playback_state {
             PlaybackState::Error(msg) => vec![

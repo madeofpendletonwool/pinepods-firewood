@@ -1,16 +1,16 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::time::Instant;
 
-use crate::api::{PinepodsClient, SearchResultItem};
-use crate::audio::AudioPlayer;
+use crate::api::{Api, SearchResultItem};
+use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -20,7 +20,7 @@ enum InputMode {
 }
 
 pub struct SearchPage {
-    client: PinepodsClient,
+    client: Api,
     
     // Search state
     search_input: String,
@@ -37,14 +37,14 @@ pub struct SearchPage {
     last_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
     
     // Theme management
     theme_manager: ThemeManager,
 }
 
 impl SearchPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
@@ -63,7 +63,12 @@ impl SearchPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    /// True while the search box has focus and keys are text.
+    pub fn is_editing(&self) -> bool {
+        self.input_mode == InputMode::Editing
+    }
+
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -89,9 +94,9 @@ impl SearchPage {
         self.error_message = None;
         self.success_message = None;
 
-        match self.client.search_data(&self.search_input).await {
+        match self.client.search(&self.search_input).await {
             Ok(results) => {
-                log::info!("Search found {} results for '{}'", results.len(), self.search_input);
+                tracing::info!("Search found {} results for '{}'", results.len(), self.search_input);
                 self.search_results = results;
                 self.loading = false;
                 
@@ -106,7 +111,7 @@ impl SearchPage {
             Err(e) => {
                 self.error_message = Some(format!("Search failed: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -127,18 +132,16 @@ impl SearchPage {
                         self.input_mode = InputMode::Editing;
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if let Some(selected) = self.list_state.selected() {
-                            if selected < self.search_results.len().saturating_sub(1) {
+                        if let Some(selected) = self.list_state.selected()
+                            && selected < self.search_results.len().saturating_sub(1) {
                                 self.list_state.select(Some(selected + 1));
                             }
-                        }
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if let Some(selected) = self.list_state.selected() {
-                            if selected > 0 {
+                        if let Some(selected) = self.list_state.selected()
+                            && selected > 0 {
                                 self.list_state.select(Some(selected - 1));
                             }
-                        }
                     }
                     KeyCode::Enter => {
                         self.play_selected_result().await?;
@@ -180,21 +183,18 @@ impl SearchPage {
     }
 
     async fn play_selected_result(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(result) = self.search_results.get(selected) {
-                log::info!("Playing search result: {}", result.episode_title);
+        if let Some(selected) = self.list_state.selected()
+            && let Some(result) = self.search_results.get(selected) {
+                tracing::info!("Playing search result: {}", result.episode_title);
                 
                 if let Some(ref mut audio_player) = self.audio_player {
-                    // Convert SearchResultItem to Episode for the audio player
-                    let episode = result.clone().into();
-                    audio_player.play_episode(episode)?;
+                    audio_player.play_episode(result.episode.clone())?;
                     // No UI message needed - the player box will show loading state
                 } else {
-                    log::warn!("No audio player available");
+                    tracing::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());
                 }
             }
-        }
         Ok(())
     }
 
@@ -266,10 +266,8 @@ impl SearchPage {
 
         // Show cursor when editing
         if self.input_mode == InputMode::Editing {
-            frame.set_cursor(
-                area.x + self.search_input.len() as u16 + 1,
-                area.y + 1,
-            );
+            let typed = unicode_width::UnicodeWidthStr::width(self.search_input.as_str()) as u16;
+            frame.set_cursor_position((area.x + typed + 1, area.y + 1));
         }
     }
 
@@ -307,7 +305,7 @@ impl SearchPage {
                 let mut indicators = Vec::new();
                 if result.completed {
                     indicators.push("✅");
-                } else if result.listen_duration > 0 {
+                } else if result.listen_duration.unwrap_or(0) > 0 {
                     indicators.push("▶️");
                 }
                 if result.saved {
@@ -332,7 +330,7 @@ impl SearchPage {
                 ]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(&result.podcast_name, Style::default().fg(theme_colors.accent)),
+                    Span::styled(result.podcast_name.as_deref().unwrap_or_default(), Style::default().fg(theme_colors.accent)),
                     Span::styled(format!(" • {}", pub_date), Style::default().fg(theme_colors.warning)),
                     Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
                 ]);

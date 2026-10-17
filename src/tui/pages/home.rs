@@ -1,11 +1,11 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, Clear, Gauge, List, ListItem, ListState,
+        Block, BorderType, Borders, List, ListItem, ListState,
         Paragraph, Wrap
     },
     Frame,
@@ -13,8 +13,8 @@ use ratatui::{
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
-use crate::api::{PinepodsClient, HomeOverview, Episode, Playlist};
-use crate::audio::AudioPlayer;
+use crate::api::{Api, HomeOverview, Episode};
+use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone)]
@@ -97,7 +97,7 @@ impl ScrollState {
 }
 
 pub struct HomePage {
-    client: PinepodsClient,
+    client: Api,
     
     // Data
     overview: Option<HomeOverview>,
@@ -124,7 +124,7 @@ pub struct HomePage {
     last_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -143,13 +143,11 @@ struct HomeSection {
 #[derive(Debug, Clone)]
 enum HomeItem {
     Episode(Episode),
-    Playlist(Playlist),
-    Action(String, String), // title, description
     Stat(String), // statistic text
 }
 
 impl HomePage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut item_list_state = ListState::default();
         item_list_state.select(Some(0));
         
@@ -171,7 +169,7 @@ impl HomePage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -192,7 +190,7 @@ impl HomePage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load home data: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
 
@@ -289,11 +287,10 @@ impl HomePage {
             }
             KeyCode::Right | KeyCode::Char('l') => {
                 // Move to items panel if current section has items
-                if let Some(section) = self.sections.get(self.selected_section) {
-                    if !section.items.is_empty() {
+                if let Some(section) = self.sections.get(self.selected_section)
+                    && !section.items.is_empty() {
                         self.focused_panel = FocusPanel::Items;
                     }
-                }
             }
             KeyCode::Left | KeyCode::Char('h') => {
                 // Move back to sections panel
@@ -377,8 +374,8 @@ impl HomePage {
     }
 
     fn next_item(&mut self) {
-        if let Some(section) = self.sections.get(self.selected_section) {
-            if !section.items.is_empty() {
+        if let Some(section) = self.sections.get(self.selected_section)
+            && !section.items.is_empty() {
                 if let Some(selected) = self.item_list_state.selected() {
                     if selected < section.items.len().saturating_sub(1) {
                         self.item_list_state.select(Some(selected + 1));
@@ -389,12 +386,11 @@ impl HomePage {
                     self.selected_item = 0;
                 }
             }
-        }
     }
 
     fn previous_item(&mut self) {
-        if let Some(section) = self.sections.get(self.selected_section) {
-            if !section.items.is_empty() {
+        if let Some(section) = self.sections.get(self.selected_section)
+            && !section.items.is_empty() {
                 if let Some(selected) = self.item_list_state.selected() {
                     if selected > 0 {
                         self.item_list_state.select(Some(selected - 1));
@@ -405,7 +401,6 @@ impl HomePage {
                     self.selected_item = 0;
                 }
             }
-        }
     }
 
     fn next_section(&mut self) {
@@ -445,34 +440,25 @@ impl HomePage {
     }
 
     async fn activate_selected(&mut self) -> Result<()> {
-        if let Some(section) = self.sections.get(self.selected_section) {
-            if let Some(item) = section.items.get(self.selected_item) {
+        if let Some(section) = self.sections.get(self.selected_section)
+            && let Some(item) = section.items.get(self.selected_item) {
                 match item {
                     HomeItem::Episode(episode) => {
-                        log::info!("Playing episode from home: {}", episode.episode_title);
+                        tracing::info!("Playing episode from home: {}", episode.episode_title);
                         
                         if let Some(ref mut audio_player) = self.audio_player {
                             audio_player.play_episode(episode.clone())?;
                             // No UI message needed - the player box will show loading state
                         } else {
-                            log::warn!("No audio player available");
+                            tracing::warn!("No audio player available");
                             self.error_message = Some("Audio player not available".to_string());
                         }
-                    }
-                    HomeItem::Playlist(playlist) => {
-                        // TODO: Navigate to playlist
-                        log::info!("Opening playlist: {}", playlist.name);
-                    }
-                    HomeItem::Action(title, _) => {
-                        // TODO: Handle quick actions
-                        log::info!("Executing action: {}", title);
                     }
                     HomeItem::Stat(_) => {
                         // Stats are not actionable
                     }
                 }
             }
-        }
         Ok(())
     }
 
@@ -569,11 +555,7 @@ impl HomePage {
 
     fn render_section_content(&mut self, frame: &mut Frame, area: Rect) {
         // First collect all the section data to avoid borrowing conflicts
-        let section_data = if let Some(section) = self.sections.get(self.selected_section) {
-            Some((section.items.clone(), section.title.clone(), section.icon.clone()))
-        } else {
-            None
-        };
+        let section_data = self.sections.get(self.selected_section).map(|section| (section.items.clone(), section.title.clone(), section.icon.clone()));
         
         if let Some((items, section_title, section_icon)) = section_data {
             // Pre-calculate scrolled titles for episodes to avoid borrowing issues
@@ -581,7 +563,7 @@ impl HomePage {
             let available_width = area.width as usize;
             
             // First collect episode data that needs scrolling
-            let episode_data: Vec<(usize, String, Option<i64>)> = items
+            let episode_data: Vec<(usize, String, i64)> = items
                 .iter()
                 .enumerate()
                 .filter_map(|(index, item)| {
@@ -601,7 +583,7 @@ impl HomePage {
                 let title_max_width = available_width.saturating_sub(status_width + 6).max(40);
                 
                 // Use scrolling for long episode titles
-                let scroll_key = format!("home_episode_{}_{}", index, episode_id.unwrap_or(0));
+                let scroll_key = format!("home_episode_{}_{}", index, episode_id);
                 let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
                 scrolled_titles.push((index, displayed_title));
             }
@@ -630,18 +612,18 @@ impl HomePage {
                             
                             // Status indicators
                             let mut indicators = Vec::new();
-                            if episode.completed.unwrap_or(false) {
+                            if episode.completed {
                                 indicators.push("✅");
                             } else if episode.listen_duration.unwrap_or(0) > 0 {
                                 indicators.push("▶️");
                             }
-                            if episode.saved.unwrap_or(false) {
+                            if episode.saved {
                                 indicators.push("⭐");
                             }
-                            if episode.queued.unwrap_or(false) {
+                            if episode.queued {
                                 indicators.push("📝");
                             }
-                            if episode.downloaded.unwrap_or(false) {
+                            if episode.downloaded {
                                 indicators.push("📥");
                             }
 
@@ -680,15 +662,6 @@ impl HomePage {
 
                             ListItem::new(Text::from(vec![line1, line2]))
                         }
-                        HomeItem::Playlist(playlist) => {
-                            let count = playlist.episode_count.unwrap_or(0);
-                            let text = format!("📋 {} ({} episodes)", playlist.name, count);
-                            ListItem::new(Text::from(text)).style(style)
-                        }
-                        HomeItem::Action(title, description) => {
-                            let text = format!("⚡ {} - {}", title, description);
-                            ListItem::new(Text::from(text)).style(style)
-                        }
                         HomeItem::Stat(text) => {
                             let text = format!("📊 {}", text);
                             ListItem::new(Text::from(text)).style(style)
@@ -724,13 +697,11 @@ impl HomePage {
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let controls = vec![
-            ("↑↓/jk", "Navigate"),
+        let controls = [("↑↓/jk", "Navigate"),
             ("←→/hl", "Switch panels"),
             ("Tab", "Switch panels"),
             ("Enter", "Activate"),
-            ("r", "Refresh"),
-        ];
+            ("r", "Refresh")];
 
         let footer_text: Vec<Span> = controls
             .iter()

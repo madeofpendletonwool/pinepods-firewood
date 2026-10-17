@@ -4,6 +4,7 @@ use std::fs;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     /// Auto-load episodes when navigating in podcasts/downloads
     pub auto_load_episodes: bool,
@@ -13,8 +14,6 @@ pub struct AppSettings {
     pub skip_interval: u64,
     /// Theme preferences
     pub theme: ThemeSettings,
-    /// Remote control settings
-    pub remote_control: RemoteControlSettings,
     /// Audio settings
     pub audio: AudioSettings,
     /// UI settings
@@ -22,23 +21,21 @@ pub struct AppSettings {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ThemeSettings {
     pub theme_name: String,
     pub use_borders: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteControlSettings {
-    pub enabled: bool,
-    pub preferred_port: u16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+#[derive(Default)]
 pub struct AudioSettings {
     pub selected_device: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UiSettings {
     /// Custom tab order - list of tab names in order
     pub tab_order: Vec<String>,
@@ -51,7 +48,6 @@ impl Default for AppSettings {
             default_volume: 0.7,
             skip_interval: 15,
             theme: ThemeSettings::default(),
-            remote_control: RemoteControlSettings::default(),
             audio: AudioSettings::default(),
             ui: UiSettings::default(),
         }
@@ -67,22 +63,6 @@ impl Default for ThemeSettings {
     }
 }
 
-impl Default for RemoteControlSettings {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            preferred_port: 8042,
-        }
-    }
-}
-
-impl Default for AudioSettings {
-    fn default() -> Self {
-        Self {
-            selected_device: None, // None means use system default
-        }
-    }
-}
 
 impl Default for UiSettings {
     fn default() -> Self {
@@ -110,42 +90,46 @@ pub struct SettingsManager {
 impl SettingsManager {
     pub fn new() -> Result<Self> {
         let settings_path = Self::get_settings_path()?;
-        let settings = Self::load_from_file(&settings_path).unwrap_or_default();
-        
+        let settings = match Self::load_from_file(&settings_path) {
+            Ok(settings) => settings,
+            Err(e) => {
+                tracing::warn!("couldn't read {}, using defaults: {e:#}", settings_path.display());
+                AppSettings::default()
+            }
+        };
         Ok(Self {
             settings_path,
             settings,
         })
     }
 
-    pub fn get_settings_path() -> Result<PathBuf> {
-        let home_dir = home::home_dir()
-            .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?;
-        
-        let config_dir = home_dir.join(".config").join("pinepods-firewood");
-        
-        // Ensure the directory exists
-        if !config_dir.exists() {
-            fs::create_dir_all(&config_dir)?;
+    /// Defaults that won't be written anywhere, for when the config dir is unusable.
+    pub fn with_defaults() -> Self {
+        Self {
+            settings_path: PathBuf::new(),
+            settings: AppSettings::default(),
         }
-        
-        Ok(config_dir.join("settings.json"))
+    }
+
+    pub fn get_settings_path() -> Result<PathBuf> {
+        Ok(crate::paths::config_dir()?.join("settings.json"))
     }
 
     fn load_from_file(path: &PathBuf) -> Result<AppSettings> {
         if !path.exists() {
             return Ok(AppSettings::default());
         }
-        
         let content = fs::read_to_string(path)?;
-        let settings: AppSettings = serde_json::from_str(&content)?;
-        Ok(settings)
+        Ok(serde_json::from_str(&content)?)
     }
 
     pub fn save(&self) -> Result<()> {
+        if self.settings_path.as_os_str().is_empty() {
+            return Ok(());
+        }
         let content = serde_json::to_string_pretty(&self.settings)?;
         fs::write(&self.settings_path, content)?;
-        log::info!("Settings saved to: {}", self.settings_path.display());
+        tracing::debug!("settings saved to {}", self.settings_path.display());
         Ok(())
     }
 
@@ -178,14 +162,6 @@ impl SettingsManager {
         self.settings.skip_interval
     }
 
-    pub fn remote_control_enabled(&self) -> bool {
-        self.settings.remote_control.enabled
-    }
-
-    pub fn remote_control_port(&self) -> u16 {
-        self.settings.remote_control.preferred_port
-    }
-
     pub fn selected_audio_device(&self) -> Option<String> {
         self.settings.audio.selected_device.clone()
     }
@@ -204,99 +180,13 @@ impl SettingsManager {
     }
 }
 
-// Audio device enumeration utilities
+/// Output devices as `(value, label)` pairs for the settings page, with the system
+/// default first.
 pub fn get_available_audio_devices() -> Vec<(String, String)> {
-    use rodio::{cpal::traits::{DeviceTrait, HostTrait}};
-    
-    let mut devices = Vec::new();
-    
-    // Add default device option
-    devices.push(("default".to_string(), "System Default".to_string()));
-    
-    // Redirect stderr to our log file during audio device enumeration
-    // This way ALSA debug messages go to the log file instead of bleeding into TUI
-    let log_file_path = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("pinepods")
-        .join("logs")
-        .join("pinepods.log");
-    
-    let _stderr_redirect = RedirectStderrToLog::new(&log_file_path);
-    
-    match std::panic::catch_unwind(|| {
-        let host = rodio::cpal::default_host();
-        let mut found_devices = Vec::new();
-        
-        // Log that we're enumerating audio devices
-        log::debug!("Enumerating audio devices...");
-        
-        // Get output devices
-        if let Ok(device_iter) = host.output_devices() {
-            for device in device_iter {
-                if let Ok(name) = device.name() {
-                    let display_name = if name.len() > 40 {
-                        format!("{}...", &name[..37])
-                    } else {
-                        name.clone()
-                    };
-                    found_devices.push((name.clone(), display_name));
-                    log::debug!("Found audio device: {}", name);
-                }
-            }
-        }
-        
-        log::debug!("Audio device enumeration completed, found {} devices", found_devices.len());
-        found_devices
-    }) {
-        Ok(found_devices) => devices.extend(found_devices),
-        Err(_) => {
-            log::warn!("Audio device enumeration panicked, using default only");
-        }
-    }
-    
+    let mut devices = vec![("default".to_string(), "System Default".to_string())];
+    devices.extend(crate::audio::engine::output_device_names().into_iter().map(|name| {
+        let label = crate::tui::text::truncate(&name, 40);
+        (name, label)
+    }));
     devices
-}
-
-// Helper to redirect stderr to log file during audio operations
-struct RedirectStderrToLog {
-    original_stderr: Option<std::fs::File>,
-}
-
-impl RedirectStderrToLog {
-    fn new(log_file: &std::path::Path) -> Self {
-        use std::os::unix::io::{AsRawFd, FromRawFd};
-        
-        unsafe {
-            // Save original stderr
-            let original_stderr_fd = libc::dup(2);
-            let original_stderr = if original_stderr_fd >= 0 {
-                Some(std::fs::File::from_raw_fd(original_stderr_fd))
-            } else {
-                None
-            };
-            
-            // Open log file for appending
-            if let Ok(log_file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_file) {
-                // Redirect stderr to log file
-                libc::dup2(log_file.as_raw_fd(), 2);
-            }
-            
-            RedirectStderrToLog { original_stderr }
-        }
-    }
-}
-
-impl Drop for RedirectStderrToLog {
-    fn drop(&mut self) {
-        if let Some(original_stderr) = self.original_stderr.take() {
-            use std::os::unix::io::AsRawFd;
-            unsafe {
-                // Restore original stderr
-                libc::dup2(original_stderr.as_raw_fd(), 2);
-            }
-        }
-    }
 }

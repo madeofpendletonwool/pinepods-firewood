@@ -1,17 +1,17 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::api::{PinepodsClient, DownloadItem};
-use crate::audio::AudioPlayer;
+use crate::api::{EpisodeKey, Api, DownloadItem};
+use crate::playback::Playback;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
 
@@ -101,7 +101,7 @@ enum FocusPanel {
 }
 
 pub struct DownloadsPage {
-    client: PinepodsClient,
+    client: Api,
     
     // Data
     all_downloads: Vec<DownloadItem>,
@@ -125,7 +125,7 @@ pub struct DownloadsPage {
     last_scroll_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
     
     // Settings
     settings_manager: SettingsManager,
@@ -138,17 +138,16 @@ pub struct DownloadsPage {
 struct PodcastWithDownloads {
     podcast_id: i64,
     podcast_name: String,
-    artwork_url: String,
     download_count: usize,
 }
 
 impl DownloadsPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));
         
         let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
-            log::error!("Failed to create settings manager: {}", e);
+            tracing::error!("Failed to create settings manager: {}", e);
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
         
@@ -173,7 +172,7 @@ impl DownloadsPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -191,7 +190,7 @@ impl DownloadsPage {
 
         match self.client.get_downloads().await {
             Ok(downloads) => {
-                log::info!("Loaded {} downloads", downloads.len());
+                tracing::info!("Loaded {} downloads", downloads.len());
                 self.all_downloads = downloads;
                 self.loading = false;
                 
@@ -201,7 +200,7 @@ impl DownloadsPage {
                 // Auto-select first podcast and load its downloads
                 if !self.podcasts_with_downloads.is_empty() {
                     self.podcast_list_state.select(Some(0));
-                    if let Some(podcast) = self.podcasts_with_downloads.get(0) {
+                    if let Some(podcast) = self.podcasts_with_downloads.first() {
                         self.load_podcast_downloads(podcast.podcast_id).await?;
                     }
                 }
@@ -209,7 +208,7 @@ impl DownloadsPage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load downloads: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -220,11 +219,11 @@ impl DownloadsPage {
         let mut podcast_map: HashMap<i64, PodcastWithDownloads> = HashMap::new();
         
         for download in &self.all_downloads {
-            let entry = podcast_map.entry(download.podcast_id).or_insert_with(|| {
+            let podcast_id = download.podcast_id.unwrap_or_default();
+            let entry = podcast_map.entry(podcast_id).or_insert_with(|| {
                 PodcastWithDownloads {
-                    podcast_id: download.podcast_id,
-                    podcast_name: download.podcast_name.clone(),
-                    artwork_url: download.artwork_url.clone(),
+                    podcast_id,
+                    podcast_name: download.podcast_name.clone().unwrap_or_default(),
                     download_count: 0,
                 }
             });
@@ -245,14 +244,14 @@ impl DownloadsPage {
         // Filter downloads for this podcast
         self.selected_podcast_downloads = self.all_downloads
             .iter()
-            .filter(|d| d.podcast_id == podcast_id)
+            .filter(|d| d.podcast_id == Some(podcast_id))
             .cloned()
             .collect();
         
         // Sort by episode pub date (newest first)
         self.selected_podcast_downloads.sort_by(|a, b| b.episode_pub_date.cmp(&a.episode_pub_date));
         
-        log::info!("Loaded {} downloads for podcast {}", self.selected_podcast_downloads.len(), podcast_id);
+        tracing::info!("Loaded {} downloads for podcast {}", self.selected_podcast_downloads.len(), podcast_id);
         self.loading_downloads = false;
         
         Ok(())
@@ -283,62 +282,55 @@ impl DownloadsPage {
             KeyCode::Down | KeyCode::Char('j') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected < self.podcasts_with_downloads.len().saturating_sub(1) {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected < self.podcasts_with_downloads.len().saturating_sub(1) {
                                 self.podcast_list_state.select(Some(selected + 1));
                                 
                                 // Auto-load downloads if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts_with_downloads.get(selected + 1) {
+                                if self.settings_manager.auto_load_episodes()
+                                    && let Some(podcast) = self.podcasts_with_downloads.get(selected + 1) {
                                         let _ = self.load_podcast_downloads(podcast.podcast_id).await;
                                     }
-                                }
                             }
-                        }
                     }
                     FocusPanel::Downloads => {
-                        if let Some(selected) = self.download_list_state.selected() {
-                            if selected < self.selected_podcast_downloads.len().saturating_sub(1) {
+                        if let Some(selected) = self.download_list_state.selected()
+                            && selected < self.selected_podcast_downloads.len().saturating_sub(1) {
                                 self.download_list_state.select(Some(selected + 1));
                             }
-                        }
                     }
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected > 0 {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected > 0 {
                                 self.podcast_list_state.select(Some(selected - 1));
                                 
                                 // Auto-load downloads if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts_with_downloads.get(selected - 1) {
+                                if self.settings_manager.auto_load_episodes()
+                                    && let Some(podcast) = self.podcasts_with_downloads.get(selected - 1) {
                                         let _ = self.load_podcast_downloads(podcast.podcast_id).await;
                                     }
-                                }
                             }
-                        }
                     }
                     FocusPanel::Downloads => {
-                        if let Some(selected) = self.download_list_state.selected() {
-                            if selected > 0 {
+                        if let Some(selected) = self.download_list_state.selected()
+                            && selected > 0 {
                                 self.download_list_state.select(Some(selected - 1));
                             }
-                        }
                     }
                 }
             }
             KeyCode::Enter => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if let Some(podcast) = self.podcasts_with_downloads.get(selected) {
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && let Some(podcast) = self.podcasts_with_downloads.get(selected) {
                                 self.load_podcast_downloads(podcast.podcast_id).await?;
                                 self.focused_panel = FocusPanel::Downloads;
                             }
-                        }
                     }
                     FocusPanel::Downloads => {
                         self.play_selected_download().await?;
@@ -349,14 +341,12 @@ impl DownloadsPage {
                 self.refresh().await?;
             }
             KeyCode::Char('d') => {
-                if self.focused_panel == FocusPanel::Downloads {
-                    if let Some(selected) = self.download_list_state.selected() {
-                        if let Some(download) = self.selected_podcast_downloads.get(selected) {
-                            log::debug!("Delete key pressed for download: {} (id: {})", download.episode_title, download.episode_id);
+                if self.focused_panel == FocusPanel::Downloads
+                    && let Some(selected) = self.download_list_state.selected()
+                        && let Some(download) = self.selected_podcast_downloads.get(selected) {
+                            tracing::debug!("Delete key pressed for download: {} (id: {})", download.episode_title, download.episode_id);
                             self.delete_download(download.episode_id, download.is_youtube).await?;
                         }
-                    }
-                }
             }
             _ => {}
         }
@@ -365,51 +355,31 @@ impl DownloadsPage {
     }
 
     async fn play_selected_download(&mut self) -> Result<()> {
-        if let Some(selected) = self.download_list_state.selected() {
-            if let Some(download) = self.selected_podcast_downloads.get(selected) {
-                log::info!("Playing downloaded episode: {}", download.episode_title);
+        if let Some(selected) = self.download_list_state.selected()
+            && let Some(download) = self.selected_podcast_downloads.get(selected) {
+                tracing::info!("Playing downloaded episode: {}", download.episode_title);
                 
                 if let Some(ref mut audio_player) = self.audio_player {
-                    // Convert DownloadItem to Episode for the audio player
-                    let episode = crate::api::Episode {
-                        episode_id: Some(download.episode_id),
-                        podcast_id: Some(download.podcast_id),
-                        podcast_name: Some(download.podcast_name.clone()),
-                        episode_title: download.episode_title.clone(),
-                        episode_pub_date: download.episode_pub_date.clone(),
-                        episode_description: download.episode_description.clone(),
-                        episode_artwork: download.episode_artwork.clone(),
-                        episode_url: download.episode_url.clone(),
-                        episode_duration: download.episode_duration,
-                        listen_duration: download.listen_duration,
-                        completed: Some(download.completed),
-                        saved: Some(download.saved),
-                        queued: Some(download.queued),
-                        downloaded: Some(download.downloaded),
-                        is_youtube: Some(download.is_youtube),
-                    };
-                    
-                    audio_player.play_episode(episode)?;
+                    audio_player.play_episode(download.episode.clone())?;
                     self.error_message = Some("🎵 Download started! Switch to Player tab (4) to control playback".to_string());
                 } else {
-                    log::warn!("No audio player available");
+                    tracing::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());
                 }
             }
-        }
         Ok(())
     }
 
     async fn delete_download(&mut self, episode_id: i64, is_youtube: bool) -> Result<()> {
-        log::debug!("delete_download called with episode_id: {}, is_youtube: {}", episode_id, is_youtube);
-        match self.client.delete_download(episode_id, is_youtube).await {
+        tracing::debug!("delete_download called with episode_id: {}, is_youtube: {}", episode_id, is_youtube);
+        match self.client.delete_download(EpisodeKey { episode_id, is_youtube }).await {
             Ok(_) => {
                 self.error_message = Some("🗑️ Episode download deleted successfully!".to_string());
                 // Refresh to update the UI
                 self.refresh().await?;
             }
             Err(e) => {
-                log::error!("Failed to delete download: {}", e);
+                tracing::error!("Failed to delete download: {}", e);
                 self.error_message = Some(format!("❌ Failed to delete download: {}", e));
             }
         }
@@ -788,14 +758,12 @@ impl DownloadsPage {
 
     fn render_controls_footer(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        let controls = vec![
-            ("↑↓/jk", "Navigate"),
+        let controls = [("↑↓/jk", "Navigate"),
             ("←→/hl", "Switch panel"),
             ("Tab", "Switch panel"),
             ("Enter", "Play/Select"),
             ("d", "Delete download"),
-            ("r", "Refresh"),
-        ];
+            ("r", "Refresh")];
 
         let footer_text: Vec<Span> = controls
             .iter()

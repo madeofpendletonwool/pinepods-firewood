@@ -1,17 +1,17 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::time::{Duration, Instant};
 use std::collections::HashMap;
 
-use crate::api::{PinepodsClient, Episode};
-use crate::audio::AudioPlayer;
+use crate::api::{EpisodeKey, Api, Episode};
+use crate::playback::Playback;
 use crate::theme::ThemeManager;
 
 #[derive(Debug, Clone)]
@@ -114,8 +114,8 @@ impl EpisodesFilter {
     pub fn matches(&self, episode: &Episode) -> bool {
         match self {
             Self::All => true,
-            Self::Completed => episode.completed.unwrap_or(false),
-            Self::InProgress => episode.listen_duration.unwrap_or(0) > 0 && !episode.completed.unwrap_or(false),
+            Self::Completed => episode.completed,
+            Self::InProgress => episode.listen_duration.unwrap_or(0) > 0 && !episode.completed,
             Self::Unplayed => episode.listen_duration.unwrap_or(0) == 0,
         }
     }
@@ -140,7 +140,7 @@ impl EpisodesFilter {
 }
 
 pub struct EpisodesPage {
-    client: PinepodsClient,
+    client: Api,
     
     // Data
     episodes: Vec<Episode>,
@@ -162,14 +162,14 @@ pub struct EpisodesPage {
     last_scroll_update: Instant,
     
     // Audio player
-    audio_player: Option<AudioPlayer>,
+    audio_player: Option<Playback>,
     
     // Theme management
     theme_manager: ThemeManager,
 }
 
 impl EpisodesPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
@@ -191,7 +191,7 @@ impl EpisodesPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -209,7 +209,7 @@ impl EpisodesPage {
 
         match self.client.get_recent_episodes().await {
             Ok(episodes) => {
-                log::info!("Loaded {} episodes", episodes.len());
+                tracing::info!("Loaded {} episodes", episodes.len());
                 self.episodes = episodes;
                 self.apply_filters();
                 self.loading = false;
@@ -217,7 +217,7 @@ impl EpisodesPage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load episodes: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
         
@@ -283,18 +283,16 @@ impl EpisodesPage {
         } else {
             match key.code {
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if let Some(selected) = self.list_state.selected() {
-                        if selected < self.filtered_episodes.len().saturating_sub(1) {
+                    if let Some(selected) = self.list_state.selected()
+                        && selected < self.filtered_episodes.len().saturating_sub(1) {
                             self.list_state.select(Some(selected + 1));
                         }
-                    }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if let Some(selected) = self.list_state.selected() {
-                        if selected > 0 {
+                    if let Some(selected) = self.list_state.selected()
+                        && selected > 0 {
                             self.list_state.select(Some(selected - 1));
                         }
-                    }
                 }
                 KeyCode::Enter => {
                     self.play_selected_episode().await?;
@@ -315,52 +313,49 @@ impl EpisodesPage {
                     self.refresh().await?;
                 }
                 KeyCode::Char('s') => {
-                    if let Some(selected) = self.list_state.selected() {
-                        if let Some(episode) = self.filtered_episodes.get(selected) {
-                            if let Some(episode_id) = episode.episode_id {
-                                log::debug!("Save key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
-                                self.toggle_saved(episode_id as i64).await?;
+                    if let Some(selected) = self.list_state.selected()
+                        && let Some(episode) = self.filtered_episodes.get(selected) {
+                            if let episode_id @ 1.. = episode.episode_id {
+                                tracing::debug!("Save key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                self.toggle_saved(episode_id).await?;
                             } else {
-                                log::error!("No episode ID found for episode: {}", episode.episode_title);
+                                tracing::error!("No episode ID found for episode: {}", episode.episode_title);
                                 self.error_message = Some("❌ Cannot save episode: missing ID".to_string());
                             }
                         }
-                    }
                 }
                 KeyCode::Char('a') => {
-                    log::debug!("Queue key 'a' pressed - starting handler");
-                    if let Some(selected) = self.list_state.selected() {
-                        if let Some(episode) = self.filtered_episodes.get(selected) {
-                            if let Some(episode_id) = episode.episode_id {
-                                log::debug!("Queue key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
-                                self.toggle_queued(episode_id as i64).await?;
+                    tracing::debug!("Queue key 'a' pressed - starting handler");
+                    if let Some(selected) = self.list_state.selected()
+                        && let Some(episode) = self.filtered_episodes.get(selected) {
+                            if let episode_id @ 1.. = episode.episode_id {
+                                tracing::debug!("Queue key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                self.toggle_queued(episode_id).await?;
                             } else {
-                                log::error!("No episode ID found for episode: {}", episode.episode_title);
+                                tracing::error!("No episode ID found for episode: {}", episode.episode_title);
                                 self.error_message = Some("❌ Cannot queue episode: missing ID".to_string());
                             }
                         }
-                    }
                 }
                 KeyCode::Char('d') => {
-                    log::debug!("Download/Delete key 'd' pressed - starting handler");
-                    if let Some(selected) = self.list_state.selected() {
-                        if let Some(episode) = self.filtered_episodes.get(selected) {
-                            if let Some(episode_id) = episode.episode_id {
-                                let is_downloaded = episode.downloaded.unwrap_or(false);
+                    tracing::debug!("Download/Delete key 'd' pressed - starting handler");
+                    if let Some(selected) = self.list_state.selected()
+                        && let Some(episode) = self.filtered_episodes.get(selected) {
+                            if let episode_id @ 1.. = episode.episode_id {
+                                let is_downloaded = episode.downloaded;
                                 if is_downloaded {
-                                    log::debug!("Delete download key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
-                                    let is_youtube = episode.is_youtube.unwrap_or(false);
-                                    self.delete_download(episode_id as i64, is_youtube).await?;
+                                    tracing::debug!("Delete download key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                    let is_youtube = episode.is_youtube;
+                                    self.delete_download(episode_id, is_youtube).await?;
                                 } else {
-                                    log::debug!("Download key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
-                                    self.download_episode(episode_id as i64).await?;
+                                    tracing::debug!("Download key pressed for episode: {} (id: {})", episode.episode_title, episode_id);
+                                    self.download_episode(episode.key()).await?;
                                 }
                             } else {
-                                log::error!("No episode ID found for episode: {}", episode.episode_title);
+                                tracing::error!("No episode ID found for episode: {}", episode.episode_title);
                                 self.error_message = Some("❌ Cannot process episode: missing ID".to_string());
                             }
                         }
-                    }
                 }
                 _ => {}
             }
@@ -370,48 +365,47 @@ impl EpisodesPage {
     }
 
     async fn play_selected_episode(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(episode) = self.filtered_episodes.get(selected) {
-                log::info!("Playing episode: {}", episode.episode_title);
+        if let Some(selected) = self.list_state.selected()
+            && let Some(episode) = self.filtered_episodes.get(selected) {
+                tracing::info!("Playing episode: {}", episode.episode_title);
                 
                 if let Some(ref mut audio_player) = self.audio_player {
                     audio_player.play_episode(episode.clone())?;
                     // No UI message needed - the player box will show loading state
                 } else {
-                    log::warn!("No audio player available");
+                    tracing::warn!("No audio player available");
                     self.error_message = Some("Audio player not available".to_string());
                 }
             }
-        }
         Ok(())
     }
 
     async fn toggle_saved(&mut self, episode_id: i64) -> Result<()> {
         // Find the episode in our data
-        if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id.unwrap_or(0) == episode_id) {
-            let is_saved = episode.saved.unwrap_or(false);
-            let is_youtube = episode.is_youtube.unwrap_or(false);
+        if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id == episode_id) {
+            let is_saved = episode.saved;
+            let is_youtube = episode.is_youtube;
             
             if is_saved {
-                match self.client.unsave_episode(episode_id, is_youtube).await {
+                match self.client.unsave_episode(EpisodeKey { episode_id, is_youtube }).await {
                     Ok(_) => {
-                        episode.saved = Some(false);
+                        episode.saved = false;
                         self.error_message = Some("📌 Episode removed from saved".to_string());
                     }
                     Err(e) => {
-                        log::error!("Failed to unsave episode: {}", e);
+                        tracing::error!("Failed to unsave episode: {}", e);
                         self.error_message = Some(format!("❌ Failed to unsave episode: {}", e));
                         return Ok(());
                     }
                 }
             } else {
-                match self.client.save_episode(episode_id, is_youtube).await {
+                match self.client.save_episode(EpisodeKey { episode_id, is_youtube }).await {
                     Ok(_) => {
-                        episode.saved = Some(true);
+                        episode.saved = true;
                         self.error_message = Some("⭐ Episode saved successfully!".to_string());
                     }
                     Err(e) => {
-                        log::error!("Failed to save episode: {}", e);
+                        tracing::error!("Failed to save episode: {}", e);
                         self.error_message = Some(format!("❌ Failed to save episode: {}", e));
                         return Ok(());
                     }
@@ -424,35 +418,35 @@ impl EpisodesPage {
     }
 
     async fn toggle_queued(&mut self, episode_id: i64) -> Result<()> {
-        log::debug!("toggle_queued called with episode_id: {}", episode_id);
+        tracing::debug!("toggle_queued called with episode_id: {}", episode_id);
         // Find the episode in our data  
-        if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id.unwrap_or(0) == episode_id) {
-            let is_queued = episode.queued.unwrap_or(false);
-            let is_youtube = episode.is_youtube.unwrap_or(false);
-            log::debug!("Episode found - is_queued: {}, is_youtube: {}", is_queued, is_youtube);
+        if let Some(episode) = self.episodes.iter_mut().find(|e| e.episode_id == episode_id) {
+            let is_queued = episode.queued;
+            let is_youtube = episode.is_youtube;
+            tracing::debug!("Episode found - is_queued: {}, is_youtube: {}", is_queued, is_youtube);
             
             if is_queued {
-                log::debug!("Calling remove_from_queue for episode {}", episode_id);
-                match self.client.remove_from_queue(episode_id, is_youtube).await {
+                tracing::debug!("Calling remove_from_queue for episode {}", episode_id);
+                match self.client.remove_from_queue(EpisodeKey { episode_id, is_youtube }).await {
                     Ok(_) => {
-                        episode.queued = Some(false);
+                        episode.queued = false;
                         self.error_message = Some("📝 Episode removed from queue".to_string());
                     }
                     Err(e) => {
-                        log::error!("Failed to remove from queue: {}", e);
+                        tracing::error!("Failed to remove from queue: {}", e);
                         self.error_message = Some(format!("❌ Failed to remove from queue: {}", e));
                         return Ok(());
                     }
                 }
             } else {
-                log::debug!("Calling add_to_queue for episode {}", episode_id);
-                match self.client.add_to_queue(episode_id, is_youtube).await {
+                tracing::debug!("Calling add_to_queue for episode {}", episode_id);
+                match self.client.queue_episode(EpisodeKey { episode_id, is_youtube }, None).await {
                     Ok(_) => {
-                        episode.queued = Some(true);
+                        episode.queued = true;
                         self.error_message = Some("📝 Episode queued successfully!".to_string());
                     }
                     Err(e) => {
-                        log::error!("Failed to add to queue: {}", e);
+                        tracing::error!("Failed to add to queue: {}", e);
                         self.error_message = Some(format!("❌ Failed to add to queue: {}", e));
                         return Ok(());
                     }
@@ -464,16 +458,15 @@ impl EpisodesPage {
         Ok(())
     }
 
-    async fn download_episode(&mut self, episode_id: i64) -> Result<()> {
-        log::debug!("download_episode called with episode_id: {}", episode_id);
-        match self.client.download_episode(episode_id).await {
+    async fn download_episode(&mut self, key: EpisodeKey) -> Result<()> {
+        match self.client.download_episode(key).await {
             Ok(_) => {
                 self.error_message = Some("📥 Episode download queued successfully!".to_string());
                 // Refresh to update the UI with new download status
                 self.refresh().await?;
             }
             Err(e) => {
-                log::error!("Failed to download episode: {}", e);
+                tracing::error!("Failed to download episode: {}", e);
                 self.error_message = Some(format!("❌ Failed to download episode: {}", e));
             }
         }
@@ -481,15 +474,15 @@ impl EpisodesPage {
     }
 
     async fn delete_download(&mut self, episode_id: i64, is_youtube: bool) -> Result<()> {
-        log::debug!("delete_download called with episode_id: {}, is_youtube: {}", episode_id, is_youtube);
-        match self.client.delete_download(episode_id, is_youtube).await {
+        tracing::debug!("delete_download called with episode_id: {}, is_youtube: {}", episode_id, is_youtube);
+        match self.client.delete_download(EpisodeKey { episode_id, is_youtube }).await {
             Ok(_) => {
                 self.error_message = Some("🗑️ Episode download deleted successfully!".to_string());
                 // Refresh to update the UI with new download status
                 self.refresh().await?;
             }
             Err(e) => {
-                log::error!("Failed to delete download: {}", e);
+                tracing::error!("Failed to delete download: {}", e);
                 self.error_message = Some(format!("❌ Failed to delete download: {}", e));
             }
         }
@@ -654,7 +647,7 @@ impl EpisodesPage {
         let available_width = area.width as usize;
         
         // First collect the data we need to avoid borrowing conflicts
-        let episode_data: Vec<(usize, String, String, Option<i64>)> = self.filtered_episodes
+        let episode_data: Vec<(usize, String, String, i64)> = self.filtered_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
@@ -674,7 +667,7 @@ impl EpisodesPage {
             let title_max_width = available_width.saturating_sub(podcast_width + status_width + other_chars).max(20);
             
             // Use scrolling for long titles
-            let scroll_key = format!("episode_{}_{}", index, episode_id.unwrap_or(0));
+            let scroll_key = format!("episode_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
             scrolled_titles.push(displayed_title);
         }
@@ -687,7 +680,7 @@ impl EpisodesPage {
             .enumerate()
             .map(|(index, episode)| {
                 let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown Podcast");
-                let duration = format_duration(episode.episode_duration as i64);
+                let duration = format_duration(episode.episode_duration);
                 let listen_progress = episode.listen_duration.unwrap_or(0) as f64 / episode.episode_duration as f64;
                 
                 // Get pre-calculated scrolled title
@@ -695,18 +688,18 @@ impl EpisodesPage {
                 
                 // Status indicators
                 let mut indicators = Vec::new();
-                if episode.completed.unwrap_or(false) {
+                if episode.completed {
                     indicators.push("✅");
                 } else if episode.listen_duration.unwrap_or(0) > 0 {
                     indicators.push("▶️");
                 }
-                if episode.saved.unwrap_or(false) {
+                if episode.saved {
                     indicators.push("⭐");
                 }
-                if episode.queued.unwrap_or(false) {
+                if episode.queued {
                     indicators.push("📝");
                 }
-                if episode.downloaded.unwrap_or(false) {
+                if episode.downloaded {
                     indicators.push("📥");
                 }
 
@@ -782,21 +775,21 @@ impl EpisodesPage {
             if let Some(selected) = self.list_state.selected() {
                 if let Some(episode) = self.filtered_episodes.get(selected) {
                     // Save/Unsave
-                    if episode.saved.unwrap_or(false) {
+                    if episode.saved {
                         base_controls.push(("s", "Unsave"));
                     } else {
                         base_controls.push(("s", "Save"));
                     }
                     
                     // Queue/Unqueue
-                    if episode.queued.unwrap_or(false) {
+                    if episode.queued {
                         base_controls.push(("a", "Unqueue"));
                     } else {
                         base_controls.push(("a", "Queue"));
                     }
                     
                     // Download/Delete Download
-                    if episode.downloaded.unwrap_or(false) {
+                    if episode.downloaded {
                         base_controls.push(("d", "Delete download"));
                     } else {
                         base_controls.push(("d", "Download"));

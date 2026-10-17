@@ -1,15 +1,14 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
 use std::time::Instant;
 
-use crate::api::PinepodsClient;
 use crate::settings::{SettingsManager, get_available_audio_devices};
 use crate::theme::ThemeManager;
 
@@ -23,8 +22,6 @@ enum SettingItem {
     DefaultVolume,
     SkipInterval,
     AudioDevice,
-    RemoteControlEnabled,
-    RemoteControlPort,
     Theme,
     UseBorders,
     TabOrder,
@@ -39,8 +36,6 @@ impl SettingItem {
             Self::DefaultVolume => "Default Volume",
             Self::SkipInterval => "Skip Interval (seconds)",
             Self::AudioDevice => "Audio Output Device",
-            Self::RemoteControlEnabled => "Remote Control",
-            Self::RemoteControlPort => "Remote Control Port",
             Self::Theme => "Theme",
             Self::UseBorders => "Use Borders",
             Self::TabOrder => "Tab Order",
@@ -55,8 +50,6 @@ impl SettingItem {
             Self::DefaultVolume => "Default volume level (0-100%)",
             Self::SkipInterval => "Number of seconds to skip forward/backward",
             Self::AudioDevice => "Select audio output device",
-            Self::RemoteControlEnabled => "Enable remote control HTTP server",
-            Self::RemoteControlPort => "Port for remote control server",
             Self::Theme => "Application theme (Nordic, Abyss, Light)",
             Self::UseBorders => "Display borders around UI elements",
             Self::TabOrder => "Customize tab order and appearance",
@@ -71,8 +64,6 @@ const ALL_SETTINGS: &[SettingItem] = &[
     SettingItem::DefaultVolume,
     SettingItem::SkipInterval,
     SettingItem::AudioDevice,
-    SettingItem::RemoteControlEnabled,
-    SettingItem::RemoteControlPort,
     SettingItem::Theme,
     SettingItem::UseBorders,
     SettingItem::TabOrder,
@@ -81,7 +72,6 @@ const ALL_SETTINGS: &[SettingItem] = &[
 ];
 
 pub struct SettingsPage {
-    client: PinepodsClient,
     session_info: Option<crate::auth::SessionInfo>,
     
     // Settings management
@@ -118,14 +108,20 @@ pub struct SettingsPage {
     last_update: Instant,
 }
 
+impl Default for SettingsPage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SettingsPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new() -> Self {
         // Note: session_info will be set via set_session_info method
         let mut list_state = ListState::default();
         list_state.select(Some(0));
         
         let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
-            log::error!("Failed to create settings manager: {}", e);
+            tracing::error!("Failed to create settings manager: {}", e);
             // Create a fallback - this will use default settings
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
@@ -149,7 +145,6 @@ impl SettingsPage {
         tab_order_selector_state.select(Some(0));
         
         Self {
-            client,
             session_info: None,
             settings_manager,
             list_state,
@@ -206,18 +201,16 @@ impl SettingsPage {
 
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected < ALL_SETTINGS.len().saturating_sub(1) {
+                if let Some(selected) = self.list_state.selected()
+                    && selected < ALL_SETTINGS.len().saturating_sub(1) {
                         self.list_state.select(Some(selected + 1));
                     }
-                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected > 0 {
+                if let Some(selected) = self.list_state.selected()
+                    && selected > 0 {
                         self.list_state.select(Some(selected - 1));
                     }
-                }
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
                 self.toggle_setting().await?;
@@ -248,8 +241,8 @@ impl SettingsPage {
     }
 
     async fn toggle_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected) {
                 match setting {
                     SettingItem::AutoLoadEpisodes => {
                         let result = self.settings_manager.update(|s| {
@@ -258,16 +251,6 @@ impl SettingsPage {
                         match result {
                             Ok(_) => self.success_message = Some(format!("Auto-load episodes: {}", 
                                 if self.settings_manager.auto_load_episodes() { "Enabled" } else { "Disabled" })),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::RemoteControlEnabled => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.enabled = !s.remote_control.enabled;
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Remote control: {}", 
-                                if self.settings_manager.remote_control_enabled() { "Enabled" } else { "Disabled" })),
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
@@ -299,13 +282,12 @@ impl SettingsPage {
                     }
                 }
             }
-        }
         Ok(())
     }
 
     async fn increase_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected) {
                 match setting {
                     SettingItem::DefaultVolume => {
                         let result = self.settings_manager.update(|s| {
@@ -327,16 +309,6 @@ impl SettingsPage {
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
-                    SettingItem::RemoteControlPort => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.preferred_port = s.remote_control.preferred_port.saturating_add(1).min(65535);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Port: {}", 
-                                self.settings_manager.remote_control_port())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
                     SettingItem::AudioDevice => {
                         self.open_audio_selector();
                     }
@@ -346,13 +318,12 @@ impl SettingsPage {
                     _ => {}
                 }
             }
-        }
         Ok(())
     }
 
     async fn decrease_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected) {
                 match setting {
                     SettingItem::DefaultVolume => {
                         let result = self.settings_manager.update(|s| {
@@ -374,16 +345,6 @@ impl SettingsPage {
                             Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                         }
                     }
-                    SettingItem::RemoteControlPort => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.preferred_port = s.remote_control.preferred_port.saturating_sub(1).max(1024);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Port: {}", 
-                                self.settings_manager.remote_control_port())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
                     SettingItem::AudioDevice => {
                         self.open_audio_selector();
                     }
@@ -399,7 +360,6 @@ impl SettingsPage {
                     _ => {}
                 }
             }
-        }
         Ok(())
     }
 
@@ -415,7 +375,6 @@ impl SettingsPage {
                 Constraint::Length(3), // Header
                 Constraint::Min(5),    // Settings list
                 Constraint::Length(3), // Current server info
-                Constraint::Length(4), // Connection info
                 Constraint::Length(3), // Web UI message
                 Constraint::Length(3), // Footer/status
             ])
@@ -440,14 +399,11 @@ impl SettingsPage {
         // Current server info
         self.render_current_server_info(frame, main_layout[2]);
 
-        // Connection info
-        self.render_connection_info(frame, main_layout[3]);
-
         // Web UI message
-        self.render_web_ui_message(frame, main_layout[4]);
+        self.render_web_ui_message(frame, main_layout[3]);
 
         // Footer with controls
-        self.render_footer(frame, main_layout[5]);
+        self.render_footer(frame, main_layout[4]);
 
         // Render popups if open
         if self.theme_selector_open {
@@ -497,12 +453,6 @@ impl SettingsPage {
                             "System Default".to_string()
                         }
                     }
-                    SettingItem::RemoteControlEnabled => {
-                        if settings.remote_control.enabled { "Enabled" } else { "Disabled" }.to_string()
-                    }
-                    SettingItem::RemoteControlPort => {
-                        settings.remote_control.preferred_port.to_string()
-                    }
                     SettingItem::Theme => {
                         settings.theme.theme_name.clone()
                     }
@@ -521,7 +471,7 @@ impl SettingsPage {
                 };
 
                 let value_color = match setting {
-                    SettingItem::AutoLoadEpisodes | SettingItem::RemoteControlEnabled | SettingItem::UseBorders => {
+                    SettingItem::AutoLoadEpisodes | SettingItem::UseBorders => {
                         if value == "Enabled" { theme_colors.success } else { theme_colors.error }
                     }
                     _ => theme_colors.primary,
@@ -610,35 +560,6 @@ impl SettingsPage {
                     .border_style(Style::default().fg(theme_colors.border))
             );
         frame.render_widget(status, layout[1]);
-    }
-
-    fn render_connection_info(&self, frame: &mut Frame, area: Rect) {
-        let settings = self.settings_manager.get();
-        let theme_colors = self.theme_manager.get_colors();
-        let port = settings.remote_control.preferred_port;
-        
-        // Try to get local IP address
-        let ip_address = match local_ip_address::local_ip() {
-            Ok(ip) => ip.to_string(),
-            Err(_) => "127.0.0.1".to_string(),
-        };
-        
-        let connection_text = format!(
-            "Add this Firewood server to your PinePods instance:\nIP Address: {}  •  Port: {}",
-            ip_address, port
-        );
-        
-        let connection_info = Paragraph::new(connection_text)
-            .style(Style::default().fg(theme_colors.warning))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title("🔗 PinePods Integration")
-                    .border_style(Style::default().fg(theme_colors.primary))
-            );
-        frame.render_widget(connection_info, area);
     }
 
     fn render_theme_selector(&mut self, frame: &mut Frame, area: Rect) {
@@ -849,8 +770,8 @@ impl SettingsPage {
                 self.audio_selector_open = false;
             }
             KeyCode::Enter => {
-                if let Some(selected) = self.audio_selector_state.selected() {
-                    if let Some((device_name, display_name)) = self.available_audio_devices.get(selected) {
+                if let Some(selected) = self.audio_selector_state.selected()
+                    && let Some((device_name, display_name)) = self.available_audio_devices.get(selected) {
                         let result = self.settings_manager.update(|s| {
                             s.audio.selected_device = if device_name == "default" {
                                 None
@@ -868,7 +789,6 @@ impl SettingsPage {
                             }
                         }
                     }
-                }
                 self.audio_selector_open = false;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -937,21 +857,19 @@ impl SettingsPage {
             }
             KeyCode::Char('u') => {
                 // Move selected tab up
-                if let Some(selected) = self.tab_order_selector_state.selected() {
-                    if selected > 0 && selected < self.tab_order_editing.len() {
+                if let Some(selected) = self.tab_order_selector_state.selected()
+                    && selected > 0 && selected < self.tab_order_editing.len() {
                         self.tab_order_editing.swap(selected, selected - 1);
                         self.tab_order_selector_state.select(Some(selected - 1));
                     }
-                }
             }
             KeyCode::Char('d') => {
                 // Move selected tab down
-                if let Some(selected) = self.tab_order_selector_state.selected() {
-                    if selected < self.tab_order_editing.len() - 1 {
+                if let Some(selected) = self.tab_order_selector_state.selected()
+                    && selected < self.tab_order_editing.len() - 1 {
                         self.tab_order_editing.swap(selected, selected + 1);
                         self.tab_order_selector_state.select(Some(selected + 1));
                     }
-                }
             }
             KeyCode::Enter => {
                 // Save current order and close
@@ -1091,13 +1009,10 @@ impl SettingsPage {
     
     async fn open_log_viewer(&mut self) -> Result<()> {
         // Load log file contents
-        let log_file = std::path::PathBuf::from(
-            dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("pinepods")
-                .join("logs")
-                .join("pinepods.log")
-        );
+        let Some(log_file) = latest_log_file() else {
+            self.error_message = Some("No log file yet".to_string());
+            return Ok(());
+        };
         match std::fs::read_to_string(&log_file) {
             Ok(contents) => {
                 self.log_contents = contents.lines().map(|s| s.to_string()).collect();
@@ -1219,4 +1134,14 @@ impl SettingsPage {
         
         frame.render_widget(log_paragraph, popup_area);
     }
+}
+
+/// The most recent of the daily log files.
+fn latest_log_file() -> Option<std::path::PathBuf> {
+    std::fs::read_dir(crate::paths::log_dir().ok()?)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("firewood"))
+        .max_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok())
+        .map(|entry| entry.path())
 }
