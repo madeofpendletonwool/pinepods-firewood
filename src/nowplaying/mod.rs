@@ -37,6 +37,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A send that can't get through in this long means the connection is dead.
 const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+/// The server pings every 30 s, so this long without a single frame means the
+/// connection is dead even though TCP hasn't noticed (a frozen server, a dropped NAT
+/// mapping, a laptop waking up). It's the server's own rule for its clients.
+const SERVER_SILENCE: Duration = Duration::from_secs(75);
 const BACKOFF_MIN: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// After the server hands our id to another connection, take a new id and come
@@ -393,23 +397,24 @@ impl Service {
             clock.sent(report, Instant::now());
         }
 
+        let mut heard = tokio::time::Instant::now();
         loop {
             let due = tokio::time::Instant::from_std(clock.due());
             tokio::select! {
-                message = stream.next() => match message {
-                    Some(Ok(Message::Text(text))) => self.on_message(&text),
-                    Some(Ok(Message::Close(frame))) => {
-                        return match frame {
-                            Some(f) if u16::from(f.code) == CLOSE_REPLACED => End::Replaced,
-                            Some(f) => End::Lost(format!("the server closed the connection ({})", f.code)),
-                            None => End::Lost("the server closed the connection".into()),
-                        };
+                message = stream.next() => {
+                    if let Some(Ok(_)) = &message {
+                        heard = tokio::time::Instant::now();
                     }
-                    // Pings are answered by tungstenite as part of reading.
-                    Some(Ok(_)) => {}
-                    Some(Err(err)) => return End::Lost(format!("connection lost: {err}")),
-                    None => return End::Lost("connection lost".into()),
-                },
+                    if let Some(end) = self.on_frame(message) {
+                        return end;
+                    }
+                }
+                _ = tokio::time::sleep_until(heard + SERVER_SILENCE) => {
+                    return End::Lost(format!(
+                        "no word from the server in {}s",
+                        SERVER_SILENCE.as_secs()
+                    ));
+                }
                 changed = player.changed(), if player_alive => {
                     if changed.is_err() {
                         player_alive = false;
@@ -462,6 +467,25 @@ impl Service {
                     }
                 }
             }
+        }
+    }
+
+    /// Handles one frame from the server; `Some` once the connection is over.
+    fn on_frame(&mut self, frame: Option<Result<Message, tungstenite::Error>>) -> Option<End> {
+        match frame {
+            Some(Ok(Message::Text(text))) => {
+                self.on_message(&text);
+                None
+            }
+            Some(Ok(Message::Close(frame))) => Some(match frame {
+                Some(f) if u16::from(f.code) == CLOSE_REPLACED => End::Replaced,
+                Some(f) => End::Lost(format!("the server closed the connection ({})", f.code)),
+                None => End::Lost("the server closed the connection".into()),
+            }),
+            // Pings are answered by tungstenite as part of reading.
+            Some(Ok(_)) => None,
+            Some(Err(err)) => Some(End::Lost(format!("connection lost: {err}"))),
+            None => Some(End::Lost("connection lost".into())),
         }
     }
 
