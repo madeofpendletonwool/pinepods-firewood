@@ -211,6 +211,60 @@ pub struct Playlist {
     pub icon_name: String,
 }
 
+/// Per-podcast playback preferences from `get_play_episode_details`. The speed falls
+/// back to the user's default when the podcast has none.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct PlayDetails {
+    pub playback_speed: f64,
+    /// Seconds of intro to skip when starting from the top.
+    #[serde(default, deserialize_with = "null_default")]
+    pub start_skip: i64,
+    /// Seconds of outro to skip; the episode counts as finished this far from the end.
+    #[serde(default, deserialize_with = "null_default")]
+    pub end_skip: i64,
+}
+
+impl Default for PlayDetails {
+    fn default() -> Self {
+        Self {
+            playback_speed: 1.0,
+            start_skip: 0,
+            end_skip: 0,
+        }
+    }
+}
+
+/// A server-detected range the player should jump over.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SkipSegment {
+    /// `silence` or `ad`.
+    pub kind: String,
+    pub start_time: f64,
+    pub end_time: f64,
+    /// For ads, the user's effective review status: `active`, `pending`, `confirmed`
+    /// or `rejected`. Absent for silence.
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+impl SkipSegment {
+    pub fn is_silence(&self) -> bool {
+        self.kind == "silence"
+    }
+
+    /// Ads are skipped once detection auto-activates them or the user confirms them.
+    pub fn is_active_ad(&self) -> bool {
+        self.kind == "ad" && matches!(self.status.as_deref(), Some("active" | "confirmed"))
+    }
+}
+
+/// The per-podcast "trim silence" setting.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct SilenceTrim {
+    pub enabled: bool,
+    pub threshold: i64,
+}
+
 // Response envelopes.
 
 #[derive(Debug, Deserialize)]
@@ -241,6 +295,11 @@ pub(crate) struct SavedEnvelope {
 #[derive(Debug, Deserialize)]
 pub(crate) struct DownloadsEnvelope {
     pub downloaded_episodes: Vec<DownloadItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct SkipSegmentsEnvelope {
+    pub segments: Vec<SkipSegment>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +351,21 @@ pub(crate) struct HistoryRequest {
     pub episode_pos: f64,
     pub user_id: i64,
     pub is_youtube: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PlayDetailsRequest {
+    pub podcast_id: i64,
+    pub user_id: i64,
+    pub is_youtube: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct SilenceTrimRequest {
+    pub podcast_id: i64,
+    pub user_id: i64,
+    pub enabled: bool,
+    pub threshold: i64,
 }
 
 #[derive(Debug, Serialize)]

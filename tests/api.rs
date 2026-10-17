@@ -251,3 +251,73 @@ async fn malformed_json_is_a_decode_error_naming_the_endpoint() {
     let err = api(&server).await.get_home_overview().await.unwrap_err();
     assert!(err.to_string().contains("/api/data/home_overview"), "{err}");
 }
+
+#[tokio::test]
+async fn skip_segments_parse_ads_and_silence() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/episode_skip_segments"))
+        .and(query_param("episode_id", "77"))
+        .and(query_param("user_id", "2"))
+        .respond_with(ok(json!({"segments": [
+            {"segment_id": 1, "kind": "silence", "start_time": 12.5, "end_time": 14.0,
+             "source": "detector", "status": null},
+            {"segment_id": 2, "kind": "ad", "start_time": 300.0, "end_time": 360.0,
+             "source": "transcript", "status": "active"},
+            {"segment_id": 3, "kind": "ad", "start_time": 900.0, "end_time": 930.0,
+             "source": "transcript", "status": "rejected"}
+        ]})))
+        .mount(&server)
+        .await;
+
+    let segments = api(&server).await.get_skip_segments(77).await.unwrap();
+    assert_eq!(segments.len(), 3);
+    assert!(segments[0].is_silence());
+    assert!(segments[1].is_active_ad());
+    assert!(!segments[2].is_active_ad());
+}
+
+#[tokio::test]
+async fn play_details_request_and_response() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/get_play_episode_details"))
+        .and(body_json(
+            json!({"podcast_id": 9, "user_id": USER, "is_youtube": false}),
+        ))
+        .respond_with(ok(json!({
+            "playback_speed": 1.5, "start_skip": 30, "end_skip": 45,
+            "playback_speed_customized": true
+        })))
+        .mount(&server)
+        .await;
+
+    let details = api(&server).await.get_play_details(9, false).await.unwrap();
+    assert_eq!(details.playback_speed, 1.5);
+    assert_eq!((details.start_skip, details.end_skip), (30, 45));
+}
+
+#[tokio::test]
+async fn silence_trim_round_trip_keeps_the_threshold() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/get_silence_trim"))
+        .and(query_param("podcast_id", "9"))
+        .respond_with(ok(json!({"enabled": false, "threshold": -45})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/adjust_silence_trim"))
+        .and(body_json(json!({
+            "podcast_id": 9, "user_id": USER, "enabled": true, "threshold": -45
+        })))
+        .respond_with(ok(json!({"detail": "ok"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let mut trim = api.get_silence_trim(9).await.unwrap();
+    trim.enabled = true;
+    api.set_silence_trim(9, trim).await.unwrap();
+}
