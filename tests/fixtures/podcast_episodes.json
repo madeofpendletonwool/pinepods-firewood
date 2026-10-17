@@ -1,0 +1,22 @@
+{
+  "episodes": [
+    {
+      "podcastname": "Example Show",
+      "Episodetitle": "Ep 12 — Café talk",
+      "Episodepubdate": "2026-09-01T08:00:00",
+      "Episodedescription": "<p>Notes</p>",
+      "Episodeartwork": "https://example.com/art.jpg",
+      "Episodeurl": "https://example.com/ep12.mp3",
+      "Episodeduration": 3600,
+      "Listenduration": null,
+      "Episodeid": 12,
+      "Completed": false,
+      "saved": true,
+      "queued": false,
+      "downloaded": false,
+      "is_youtube": false,
+      "is_video": false
+    }
+  ],
+  "total": 1
+}

@@ -1,4 +1,3 @@
-// TUI utilities - placeholder for future utility functions
 pub fn format_duration(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;

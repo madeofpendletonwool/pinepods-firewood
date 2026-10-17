@@ -1,17 +1,17 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
-use std::time::{Duration, Instant};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
-use crate::api::{PinepodsClient, Podcast, PodcastEpisode, Episode};
-use crate::audio::AudioPlayer;
+use crate::api::{Api, Episode, Podcast};
+use crate::playback::Playback;
 use crate::settings::SettingsManager;
 use crate::theme::ThemeManager;
 
@@ -41,18 +41,18 @@ impl ScrollState {
             display_width,
         }
     }
-    
+
     fn update(&mut self, now: Instant) -> bool {
         // If text fits in display width, no scrolling needed
         if self.text_width <= self.display_width {
             return false;
         }
-        
+
         // Check if we're in a pause period
         if now < self.pause_until {
             return false;
         }
-        
+
         match self.direction {
             ScrollDirection::Paused => {
                 self.direction = ScrollDirection::Right;
@@ -77,15 +77,15 @@ impl ScrollState {
             }
         }
     }
-    
+
     fn get_display_text(&self, text: &str) -> String {
         if self.text_width <= self.display_width {
             return text.to_string();
         }
-        
+
         let chars: Vec<char> = text.chars().collect();
         let end_pos = (self.offset + self.display_width).min(chars.len());
-        
+
         if self.offset < chars.len() {
             chars[self.offset..end_pos].iter().collect()
         } else {
@@ -101,12 +101,12 @@ enum FocusPanel {
 }
 
 pub struct PodcastsPage {
-    client: PinepodsClient,
-    
+    client: Api,
+
     // Data
     podcasts: Vec<Podcast>,
-    selected_podcast_episodes: Vec<PodcastEpisode>,
-    
+    selected_podcast_episodes: Vec<Episode>,
+
     // UI State
     podcast_list_state: ListState,
     episode_list_state: ListState,
@@ -115,34 +115,34 @@ pub struct PodcastsPage {
     loading_episodes: bool,
     error_message: Option<String>,
     selected_podcast_id: Option<i64>,
-    
+
     // Animation
     last_update: Instant,
-    
+
     // Title scrolling animation
     scroll_states: HashMap<String, ScrollState>,
     last_scroll_update: Instant,
-    
+
     // Audio player
-    audio_player: Option<AudioPlayer>,
-    
+    audio_player: Option<Playback>,
+
     // Settings
     settings_manager: SettingsManager,
-    
+
     // Theme management
     theme_manager: ThemeManager,
 }
 
 impl PodcastsPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new(client: Api) -> Self {
         let mut podcast_list_state = ListState::default();
         podcast_list_state.select(Some(0));
-        
+
         let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
-            log::error!("Failed to create settings manager: {}", e);
+            tracing::error!("Failed to create settings manager: {}", e);
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
-        
+
         Self {
             client,
             podcasts: Vec::new(),
@@ -163,7 +163,7 @@ impl PodcastsPage {
         }
     }
 
-    pub fn set_audio_player(&mut self, audio_player: AudioPlayer) {
+    pub fn set_audio_player(&mut self, audio_player: Playback) {
         self.audio_player = Some(audio_player);
     }
 
@@ -181,14 +181,14 @@ impl PodcastsPage {
 
         match self.client.get_podcasts().await {
             Ok(podcasts) => {
-                log::info!("Loaded {} podcasts", podcasts.len());
+                tracing::info!("Loaded {} podcasts", podcasts.len());
                 self.podcasts = podcasts;
                 self.loading = false;
-                
+
                 // Auto-select first podcast and load its episodes
                 if !self.podcasts.is_empty() {
                     self.podcast_list_state.select(Some(0));
-                    if let Some(podcast) = self.podcasts.get(0) {
+                    if let Some(podcast) = self.podcasts.first() {
                         self.load_podcast_episodes(podcast.podcastid).await?;
                     }
                 }
@@ -196,10 +196,10 @@ impl PodcastsPage {
             Err(e) => {
                 self.error_message = Some(format!("Failed to load podcasts: {}", e));
                 self.loading = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
-        
+
         Ok(())
     }
 
@@ -210,18 +210,26 @@ impl PodcastsPage {
         self.episode_list_state.select(Some(0));
 
         match self.client.get_podcast_episodes(podcast_id).await {
-            Ok(episodes) => {
-                log::info!("Loaded {} episodes for podcast {}", episodes.len(), podcast_id);
+            Ok(mut episodes) => {
+                tracing::debug!(
+                    "loaded {} episodes for podcast {}",
+                    episodes.len(),
+                    podcast_id
+                );
+                // This endpoint leaves out the podcast id; playback needs it.
+                for episode in &mut episodes {
+                    episode.podcast_id.get_or_insert(podcast_id);
+                }
                 self.selected_podcast_episodes = episodes;
                 self.loading_episodes = false;
             }
             Err(e) => {
                 self.error_message = Some(format!("Failed to load episodes: {}", e));
                 self.loading_episodes = false;
-                return Err(e);
+                return Err(e.into());
             }
         }
-        
+
         Ok(())
     }
 
@@ -250,24 +258,24 @@ impl PodcastsPage {
             KeyCode::Down | KeyCode::Char('j') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected < self.podcasts.len().saturating_sub(1) {
-                                self.podcast_list_state.select(Some(selected + 1));
-                                
-                                // Auto-load episodes if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts.get(selected + 1) {
-                                        let _ = self.load_podcast_episodes(podcast.podcastid).await;
-                                    }
-                                }
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected < self.podcasts.len().saturating_sub(1)
+                        {
+                            self.podcast_list_state.select(Some(selected + 1));
+
+                            // Auto-load episodes if setting is enabled
+                            if self.settings_manager.auto_load_episodes()
+                                && let Some(podcast) = self.podcasts.get(selected + 1)
+                            {
+                                let _ = self.load_podcast_episodes(podcast.podcastid).await;
                             }
                         }
                     }
                     FocusPanel::Episodes => {
-                        if let Some(selected) = self.episode_list_state.selected() {
-                            if selected < self.selected_podcast_episodes.len().saturating_sub(1) {
-                                self.episode_list_state.select(Some(selected + 1));
-                            }
+                        if let Some(selected) = self.episode_list_state.selected()
+                            && selected < self.selected_podcast_episodes.len().saturating_sub(1)
+                        {
+                            self.episode_list_state.select(Some(selected + 1));
                         }
                     }
                 }
@@ -275,66 +283,62 @@ impl PodcastsPage {
             KeyCode::Up | KeyCode::Char('k') => {
                 match self.focused_panel {
                     FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if selected > 0 {
-                                self.podcast_list_state.select(Some(selected - 1));
-                                
-                                // Auto-load episodes if setting is enabled
-                                if self.settings_manager.auto_load_episodes() {
-                                    if let Some(podcast) = self.podcasts.get(selected - 1) {
-                                        let _ = self.load_podcast_episodes(podcast.podcastid).await;
-                                    }
-                                }
+                        if let Some(selected) = self.podcast_list_state.selected()
+                            && selected > 0
+                        {
+                            self.podcast_list_state.select(Some(selected - 1));
+
+                            // Auto-load episodes if setting is enabled
+                            if self.settings_manager.auto_load_episodes()
+                                && let Some(podcast) = self.podcasts.get(selected - 1)
+                            {
+                                let _ = self.load_podcast_episodes(podcast.podcastid).await;
                             }
                         }
                     }
                     FocusPanel::Episodes => {
-                        if let Some(selected) = self.episode_list_state.selected() {
-                            if selected > 0 {
-                                self.episode_list_state.select(Some(selected - 1));
-                            }
+                        if let Some(selected) = self.episode_list_state.selected()
+                            && selected > 0
+                        {
+                            self.episode_list_state.select(Some(selected - 1));
                         }
                     }
                 }
             }
-            KeyCode::Enter => {
-                match self.focused_panel {
-                    FocusPanel::Podcasts => {
-                        if let Some(selected) = self.podcast_list_state.selected() {
-                            if let Some(podcast) = self.podcasts.get(selected) {
-                                self.load_podcast_episodes(podcast.podcastid).await?;
-                                self.focused_panel = FocusPanel::Episodes;
-                            }
-                        }
-                    }
-                    FocusPanel::Episodes => {
-                        self.play_selected_episode().await?;
+            KeyCode::Enter => match self.focused_panel {
+                FocusPanel::Podcasts => {
+                    if let Some(selected) = self.podcast_list_state.selected()
+                        && let Some(podcast) = self.podcasts.get(selected)
+                    {
+                        self.load_podcast_episodes(podcast.podcastid).await?;
+                        self.focused_panel = FocusPanel::Episodes;
                     }
                 }
-            }
+                FocusPanel::Episodes => {
+                    self.play_selected_episode().await?;
+                }
+            },
             KeyCode::Char('r') => {
                 self.refresh().await?;
             }
             _ => {}
         }
-        
+
         Ok(())
     }
 
     async fn play_selected_episode(&mut self) -> Result<()> {
-        if let Some(selected) = self.episode_list_state.selected() {
-            if let Some(episode) = self.selected_podcast_episodes.get(selected) {
-                log::info!("Playing episode: {}", episode.episode_title);
-                
-                if let Some(ref mut audio_player) = self.audio_player {
-                    // Convert PodcastEpisode to Episode for the audio player
-                    let episode_for_player: Episode = episode.clone().into();
-                    audio_player.play_episode(episode_for_player)?;
-                    // No UI message needed - the player box will show loading state
-                } else {
-                    log::warn!("No audio player available");
-                    self.error_message = Some("Audio player not available".to_string());
-                }
+        if let Some(selected) = self.episode_list_state.selected()
+            && let Some(episode) = self.selected_podcast_episodes.get(selected)
+        {
+            tracing::info!("Playing episode: {}", episode.episode_title);
+
+            if let Some(ref mut audio_player) = self.audio_player {
+                audio_player.play_episode(episode.clone())?;
+                // No UI message needed - the player box will show loading state
+            } else {
+                tracing::warn!("No audio player available");
+                self.error_message = Some("Audio player not available".to_string());
             }
         }
         Ok(())
@@ -342,35 +346,40 @@ impl PodcastsPage {
 
     pub async fn update(&mut self) -> Result<()> {
         self.last_update = Instant::now();
-        
+
         // Update scrolling animation every 150ms
         let now = Instant::now();
         if now.duration_since(self.last_scroll_update) >= Duration::from_millis(150) {
             self.update_scroll_states(now);
             self.last_scroll_update = now;
         }
-        
+
         Ok(())
     }
-    
+
     fn update_scroll_states(&mut self, now: Instant) {
         // Update all scroll states
         for scroll_state in self.scroll_states.values_mut() {
             scroll_state.update(now);
         }
     }
-    
-    fn get_or_create_scroll_state(&mut self, key: String, text: &str, display_width: usize) -> &mut ScrollState {
+
+    fn get_or_create_scroll_state(
+        &mut self,
+        key: String,
+        text: &str,
+        display_width: usize,
+    ) -> &mut ScrollState {
         let text_width = text.chars().count();
-        
-        self.scroll_states.entry(key).or_insert_with(|| {
-            ScrollState::new(text_width, display_width)
-        })
+
+        self.scroll_states
+            .entry(key)
+            .or_insert_with(|| ScrollState::new(text_width, display_width))
     }
-    
+
     fn get_scrolled_text(&mut self, key: String, text: &str, display_width: usize) -> String {
         let scroll_state = self.get_or_create_scroll_state(key, text, display_width);
-        
+
         // Update scroll state dimensions if text OR display width changed
         let text_width = text.chars().count();
         if scroll_state.text_width != text_width || scroll_state.display_width != display_width {
@@ -380,7 +389,7 @@ impl PodcastsPage {
             scroll_state.direction = ScrollDirection::Paused;
             scroll_state.pause_until = Instant::now() + Duration::from_millis(1000);
         }
-        
+
         scroll_state.get_display_text(text)
     }
 
@@ -393,14 +402,14 @@ impl PodcastsPage {
         let main_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(40),  // Podcasts list
-                Constraint::Percentage(60),  // Episodes list
+                Constraint::Percentage(40), // Podcasts list
+                Constraint::Percentage(60), // Episodes list
             ])
             .split(area);
 
         // Render podcasts list
         self.render_podcasts_list(frame, main_layout[0]);
-        
+
         // Render episodes list
         self.render_episodes_list(frame, main_layout[1]);
     }
@@ -421,7 +430,7 @@ impl PodcastsPage {
                             Style::default().fg(theme_colors.primary)
                         } else {
                             Style::default().fg(theme_colors.border)
-                        })
+                        }),
                 );
             frame.render_widget(empty, area);
             return;
@@ -430,9 +439,10 @@ impl PodcastsPage {
         // Pre-calculate scrolled titles to avoid borrowing issues
         let mut scrolled_titles = Vec::new();
         let available_width = area.width as usize;
-        
+
         // First collect the data we need to avoid borrowing conflicts
-        let podcast_data: Vec<(usize, String, String, i64)> = self.podcasts
+        let podcast_data: Vec<(usize, String, String, i64)> = self
+            .podcasts
             .iter()
             .enumerate()
             .map(|(index, podcast)| {
@@ -442,13 +452,13 @@ impl PodcastsPage {
                 (index, name, author, podcast_id)
             })
             .collect();
-        
+
         // Now we can safely call mutable methods
-        for (index, name, author, podcast_id) in podcast_data {
+        for (index, name, _author, podcast_id) in podcast_data {
             // Use much more of the available width for podcast name
             // The second line has author info, so the first line can use most of the width
             let name_max_width = available_width.saturating_sub(8).max(30); // Just leave room for borders/padding
-            
+
             // Use scrolling for long podcast names
             let scroll_key = format!("podcast_{}_{}", index, podcast_id);
             let displayed_name = self.get_scrolled_text(scroll_key, &name, name_max_width);
@@ -458,23 +468,36 @@ impl PodcastsPage {
         // Get theme colors after mutable operations
         let theme_colors = self.theme_manager.get_colors();
 
-        let items: Vec<ListItem> = self.podcasts
+        let items: Vec<ListItem> = self
+            .podcasts
             .iter()
             .enumerate()
             .map(|(index, podcast)| {
                 let episode_count = podcast.episodecount;
                 let author = &podcast.author;
-                
+
                 // Get pre-calculated scrolled title
-                let displayed_name = scrolled_titles.get(index).cloned().unwrap_or_else(|| podcast.podcastname.clone());
-                
-                let line1 = Line::from(vec![
-                    Span::styled(displayed_name, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
-                ]);
+                let displayed_name = scrolled_titles
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| podcast.podcastname.clone());
+
+                let line1 = Line::from(vec![Span::styled(
+                    displayed_name,
+                    Style::default()
+                        .fg(theme_colors.text)
+                        .add_modifier(Modifier::BOLD),
+                )]);
 
                 let line2 = Line::from(vec![
-                    Span::styled(format!("by {}", author), Style::default().fg(theme_colors.accent)),
-                    Span::styled(format!(" • {} episodes", episode_count), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        format!("by {}", author),
+                        Style::default().fg(theme_colors.accent),
+                    ),
+                    Span::styled(
+                        format!(" • {} episodes", episode_count),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -491,13 +514,13 @@ impl PodcastsPage {
                         Style::default().fg(theme_colors.primary)
                     } else {
                         Style::default().fg(theme_colors.border)
-                    })
+                    }),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -540,7 +563,7 @@ impl PodcastsPage {
                             Style::default().fg(theme_colors.primary)
                         } else {
                             Style::default().fg(theme_colors.border)
-                        })
+                        }),
                 );
             frame.render_widget(empty, area);
             return;
@@ -549,9 +572,10 @@ impl PodcastsPage {
         // Pre-calculate scrolled titles to avoid borrowing issues
         let mut scrolled_titles = Vec::new();
         let available_width = area.width as usize;
-        
+
         // First collect the data we need to avoid borrowing conflicts
-        let episode_data: Vec<(usize, String, Option<i64>)> = self.selected_podcast_episodes
+        let episode_data: Vec<(usize, String, i64)> = self
+            .selected_podcast_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
@@ -560,17 +584,17 @@ impl PodcastsPage {
                 (index, title, episode_id)
             })
             .collect();
-        
+
         // Now we can safely call mutable methods
         for (index, title, episode_id) in episode_data {
-            // Use much more of the available width for episode title  
+            // Use much more of the available width for episode title
             // Status indicators are on the same line, so we need to be a bit more conservative
             // but still use most of the width
             let status_width = 20; // Conservative estimate for status indicators
             let title_max_width = available_width.saturating_sub(status_width + 6).max(40); // Leave room for status + padding
-            
+
             // Use scrolling for long episode titles
-            let scroll_key = format!("episode_{}_{}", index, episode_id.unwrap_or(0));
+            let scroll_key = format!("episode_{}_{}", index, episode_id);
             let displayed_title = self.get_scrolled_text(scroll_key, &title, title_max_width);
             scrolled_titles.push(displayed_title);
         }
@@ -578,16 +602,20 @@ impl PodcastsPage {
         // Get theme colors after mutable operations
         let theme_colors = self.theme_manager.get_colors();
 
-        let items: Vec<ListItem> = self.selected_podcast_episodes
+        let items: Vec<ListItem> = self
+            .selected_podcast_episodes
             .iter()
             .enumerate()
             .map(|(index, episode)| {
                 let duration = format_duration(episode.episode_duration);
                 let pub_date = format_pub_date(&episode.episode_pub_date);
-                
+
                 // Get pre-calculated scrolled title
-                let displayed_title = scrolled_titles.get(index).cloned().unwrap_or_else(|| episode.episode_title.clone());
-                
+                let displayed_title = scrolled_titles
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| episode.episode_title.clone());
+
                 // Status indicators
                 let mut indicators = Vec::new();
                 if episode.completed {
@@ -612,13 +640,21 @@ impl PodcastsPage {
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(displayed_title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        displayed_title,
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                     Span::styled(status, Style::default().fg(theme_colors.success)),
                 ]);
 
                 let line2 = Line::from(vec![
                     Span::styled(pub_date, Style::default().fg(theme_colors.accent)),
-                    Span::styled(format!(" • {}", duration), Style::default().fg(theme_colors.text_secondary)),
+                    Span::styled(
+                        format!(" • {}", duration),
+                        Style::default().fg(theme_colors.text_secondary),
+                    ),
                 ]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
@@ -635,13 +671,13 @@ impl PodcastsPage {
                         Style::default().fg(theme_colors.primary)
                     } else {
                         Style::default().fg(theme_colors.border)
-                    })
+                    }),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -660,9 +696,13 @@ impl PodcastsPage {
                 width: area.width.saturating_sub(4),
                 height: 1,
             };
-            
+
             let error_msg = Paragraph::new(format!("❌ {}", error))
-                .style(Style::default().fg(theme_colors.error).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(theme_colors.error)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .alignment(Alignment::Center);
             frame.render_widget(error_msg, error_area);
         }
@@ -691,14 +731,18 @@ impl PodcastsPage {
         frame.render_widget(Clear, popup_area);
 
         let loading = Paragraph::new(format!("🔄 {}", message))
-            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(theme_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             );
         frame.render_widget(loading, popup_area);
     }
@@ -708,7 +752,7 @@ fn format_duration(seconds: i64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
     let secs = seconds % 60;
-    
+
     if hours > 0 {
         format!("{}:{:02}:{:02}", hours, minutes, secs)
     } else {

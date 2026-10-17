@@ -1,15 +1,14 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
 };
 use std::time::Instant;
 
-use crate::api::PinepodsClient;
 use crate::settings::{SettingsManager, get_available_audio_devices};
 use crate::theme::ThemeManager;
 
@@ -23,8 +22,6 @@ enum SettingItem {
     DefaultVolume,
     SkipInterval,
     AudioDevice,
-    RemoteControlEnabled,
-    RemoteControlPort,
     Theme,
     UseBorders,
     TabOrder,
@@ -39,8 +36,6 @@ impl SettingItem {
             Self::DefaultVolume => "Default Volume",
             Self::SkipInterval => "Skip Interval (seconds)",
             Self::AudioDevice => "Audio Output Device",
-            Self::RemoteControlEnabled => "Remote Control",
-            Self::RemoteControlPort => "Remote Control Port",
             Self::Theme => "Theme",
             Self::UseBorders => "Use Borders",
             Self::TabOrder => "Tab Order",
@@ -55,8 +50,6 @@ impl SettingItem {
             Self::DefaultVolume => "Default volume level (0-100%)",
             Self::SkipInterval => "Number of seconds to skip forward/backward",
             Self::AudioDevice => "Select audio output device",
-            Self::RemoteControlEnabled => "Enable remote control HTTP server",
-            Self::RemoteControlPort => "Port for remote control server",
             Self::Theme => "Application theme (Nordic, Abyss, Light)",
             Self::UseBorders => "Display borders around UI elements",
             Self::TabOrder => "Customize tab order and appearance",
@@ -71,8 +64,6 @@ const ALL_SETTINGS: &[SettingItem] = &[
     SettingItem::DefaultVolume,
     SettingItem::SkipInterval,
     SettingItem::AudioDevice,
-    SettingItem::RemoteControlEnabled,
-    SettingItem::RemoteControlPort,
     SettingItem::Theme,
     SettingItem::UseBorders,
     SettingItem::TabOrder,
@@ -81,75 +72,79 @@ const ALL_SETTINGS: &[SettingItem] = &[
 ];
 
 pub struct SettingsPage {
-    client: PinepodsClient,
     session_info: Option<crate::auth::SessionInfo>,
-    
+
     // Settings management
     settings_manager: SettingsManager,
-    
+
     // UI State
     list_state: ListState,
     error_message: Option<String>,
     success_message: Option<String>,
-    
+
     // Audio device management
     available_audio_devices: Vec<(String, String)>,
-    
+
     // Theme management
     theme_manager: crate::theme::ThemeManager,
     theme_selector_open: bool,
     theme_selector_state: ListState,
-    
-    // Audio device selector  
+
+    // Audio device selector
     audio_selector_open: bool,
     audio_selector_state: ListState,
-    
+
     // Tab order selector
     tab_order_selector_open: bool,
     tab_order_selector_state: ListState,
     tab_order_editing: Vec<String>, // Working copy while editing
-    
+
     // Log viewer
     log_viewer_open: bool,
     log_viewer_scroll: usize,
     log_contents: Vec<String>, // Cached log lines
-    
+
     // Animation
     last_update: Instant,
 }
 
+impl Default for SettingsPage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SettingsPage {
-    pub fn new(client: PinepodsClient) -> Self {
+    pub fn new() -> Self {
         // Note: session_info will be set via set_session_info method
         let mut list_state = ListState::default();
         list_state.select(Some(0));
-        
+
         let settings_manager = SettingsManager::new().unwrap_or_else(|e| {
-            log::error!("Failed to create settings manager: {}", e);
+            tracing::error!("Failed to create settings manager: {}", e);
             // Create a fallback - this will use default settings
             SettingsManager::new().expect("Failed to create fallback settings manager")
         });
-        
+
         let available_audio_devices = vec![("default".to_string(), "System Default".to_string())]; // Lazy load when needed
-        
+
         // Initialize theme manager with current theme from settings
         let mut theme_manager = crate::theme::ThemeManager::new();
         theme_manager.set_theme(settings_manager.theme_name());
-        
+
         // Initialize theme selector state
         let mut theme_selector_state = ListState::default();
         theme_selector_state.select(Some(0));
-        
+
         // Initialize audio selector state
         let mut audio_selector_state = ListState::default();
         audio_selector_state.select(Some(0));
-        
+
         // Initialize tab order selector state
         let mut tab_order_selector_state = ListState::default();
         tab_order_selector_state.select(Some(0));
-        
+
         Self {
-            client,
             session_info: None,
             settings_manager,
             list_state,
@@ -191,32 +186,32 @@ impl SettingsPage {
         if self.theme_selector_open {
             return self.handle_theme_selector_input(key).await;
         }
-        
+
         if self.audio_selector_open {
             return self.handle_audio_selector_input(key).await;
         }
-        
+
         if self.tab_order_selector_open {
             return self.handle_tab_order_selector_input(key).await;
         }
-        
+
         if self.log_viewer_open {
             return self.handle_log_viewer_input(key).await;
         }
 
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected < ALL_SETTINGS.len().saturating_sub(1) {
-                        self.list_state.select(Some(selected + 1));
-                    }
+                if let Some(selected) = self.list_state.selected()
+                    && selected < ALL_SETTINGS.len().saturating_sub(1)
+                {
+                    self.list_state.select(Some(selected + 1));
                 }
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(selected) = self.list_state.selected() {
-                    if selected > 0 {
-                        self.list_state.select(Some(selected - 1));
-                    }
+                if let Some(selected) = self.list_state.selected()
+                    && selected > 0
+                {
+                    self.list_state.select(Some(selected - 1));
                 }
             }
             KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
@@ -243,60 +238,66 @@ impl SettingsPage {
             }
             _ => {}
         }
-        
+
         Ok(())
     }
 
     async fn toggle_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
-                match setting {
-                    SettingItem::AutoLoadEpisodes => {
-                        let result = self.settings_manager.update(|s| {
-                            s.auto_load_episodes = !s.auto_load_episodes;
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Auto-load episodes: {}", 
-                                if self.settings_manager.auto_load_episodes() { "Enabled" } else { "Disabled" })),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected)
+        {
+            match setting {
+                SettingItem::AutoLoadEpisodes => {
+                    let result = self.settings_manager.update(|s| {
+                        s.auto_load_episodes = !s.auto_load_episodes;
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Auto-load episodes: {}",
+                                if self.settings_manager.auto_load_episodes() {
+                                    "Enabled"
+                                } else {
+                                    "Disabled"
+                                }
+                            ))
                         }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                     }
-                    SettingItem::RemoteControlEnabled => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.enabled = !s.remote_control.enabled;
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Remote control: {}", 
-                                if self.settings_manager.remote_control_enabled() { "Enabled" } else { "Disabled" })),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+                }
+                SettingItem::AudioDevice => {
+                    self.open_audio_selector();
+                }
+                SettingItem::Theme => {
+                    self.open_theme_selector();
+                }
+                SettingItem::UseBorders => {
+                    let result = self.settings_manager.update(|s| {
+                        s.theme.use_borders = !s.theme.use_borders;
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Borders: {}",
+                                if self.settings_manager.get().theme.use_borders {
+                                    "Enabled"
+                                } else {
+                                    "Disabled"
+                                }
+                            ))
                         }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                     }
-                    SettingItem::AudioDevice => {
-                        self.open_audio_selector();
-                    }
-                    SettingItem::Theme => {
-                        self.open_theme_selector();
-                    }
-                    SettingItem::UseBorders => {
-                        let result = self.settings_manager.update(|s| {
-                            s.theme.use_borders = !s.theme.use_borders;
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Borders: {}", 
-                                if self.settings_manager.get().theme.use_borders { "Enabled" } else { "Disabled" })),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::TabOrder => {
-                        self.open_tab_order_selector();
-                    }
-                    SettingItem::ViewLogs => {
-                        self.open_log_viewer().await?;
-                    }
-                    _ => {
-                        // For non-toggle settings, increase the value
-                        self.increase_setting().await?;
-                    }
+                }
+                SettingItem::TabOrder => {
+                    self.open_tab_order_selector();
+                }
+                SettingItem::ViewLogs => {
+                    self.open_log_viewer().await?;
+                }
+                _ => {
+                    // For non-toggle settings, increase the value
+                    self.increase_setting().await?;
                 }
             }
         }
@@ -304,100 +305,96 @@ impl SettingsPage {
     }
 
     async fn increase_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
-                match setting {
-                    SettingItem::DefaultVolume => {
-                        let result = self.settings_manager.update(|s| {
-                            s.default_volume = (s.default_volume + 0.1).min(1.0);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Volume: {}%", 
-                                (self.settings_manager.default_volume() * 100.0) as u32)),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected)
+        {
+            match setting {
+                SettingItem::DefaultVolume => {
+                    let result = self.settings_manager.update(|s| {
+                        s.default_volume = (s.default_volume + 0.1).min(1.0);
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Volume: {}%",
+                                (self.settings_manager.default_volume() * 100.0) as u32
+                            ))
                         }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                     }
-                    SettingItem::SkipInterval => {
-                        let result = self.settings_manager.update(|s| {
-                            s.skip_interval = (s.skip_interval + 5).min(120);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Skip interval: {}s", 
-                                self.settings_manager.skip_interval())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::RemoteControlPort => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.preferred_port = s.remote_control.preferred_port.saturating_add(1).min(65535);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Port: {}", 
-                                self.settings_manager.remote_control_port())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::AudioDevice => {
-                        self.open_audio_selector();
-                    }
-                    SettingItem::Theme => {
-                        self.open_theme_selector();
-                    }
-                    _ => {}
                 }
+                SettingItem::SkipInterval => {
+                    let result = self.settings_manager.update(|s| {
+                        s.skip_interval = (s.skip_interval + 5).min(120);
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Skip interval: {}s",
+                                self.settings_manager.skip_interval()
+                            ))
+                        }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+                    }
+                }
+                SettingItem::AudioDevice => {
+                    self.open_audio_selector();
+                }
+                SettingItem::Theme => {
+                    self.open_theme_selector();
+                }
+                _ => {}
             }
         }
         Ok(())
     }
 
     async fn decrease_setting(&mut self) -> Result<()> {
-        if let Some(selected) = self.list_state.selected() {
-            if let Some(setting) = ALL_SETTINGS.get(selected) {
-                match setting {
-                    SettingItem::DefaultVolume => {
-                        let result = self.settings_manager.update(|s| {
-                            s.default_volume = (s.default_volume - 0.1).max(0.0);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Volume: {}%", 
-                                (self.settings_manager.default_volume() * 100.0) as u32)),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+        if let Some(selected) = self.list_state.selected()
+            && let Some(setting) = ALL_SETTINGS.get(selected)
+        {
+            match setting {
+                SettingItem::DefaultVolume => {
+                    let result = self.settings_manager.update(|s| {
+                        s.default_volume = (s.default_volume - 0.1).max(0.0);
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Volume: {}%",
+                                (self.settings_manager.default_volume() * 100.0) as u32
+                            ))
                         }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
                     }
-                    SettingItem::SkipInterval => {
-                        let result = self.settings_manager.update(|s| {
-                            s.skip_interval = s.skip_interval.saturating_sub(5).max(5);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Skip interval: {}s", 
-                                self.settings_manager.skip_interval())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::RemoteControlPort => {
-                        let result = self.settings_manager.update(|s| {
-                            s.remote_control.preferred_port = s.remote_control.preferred_port.saturating_sub(1).max(1024);
-                        });
-                        match result {
-                            Ok(_) => self.success_message = Some(format!("Port: {}", 
-                                self.settings_manager.remote_control_port())),
-                            Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
-                        }
-                    }
-                    SettingItem::AudioDevice => {
-                        self.open_audio_selector();
-                    }
-                    SettingItem::Theme => {
-                        self.open_theme_selector();
-                    }
-                    SettingItem::TabOrder => {
-                        self.open_tab_order_selector();
-                    }
-                    SettingItem::ViewLogs => {
-                        self.open_log_viewer().await?;
-                    }
-                    _ => {}
                 }
+                SettingItem::SkipInterval => {
+                    let result = self.settings_manager.update(|s| {
+                        s.skip_interval = s.skip_interval.saturating_sub(5).max(5);
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!(
+                                "Skip interval: {}s",
+                                self.settings_manager.skip_interval()
+                            ))
+                        }
+                        Err(e) => self.error_message = Some(format!("Failed to save: {}", e)),
+                    }
+                }
+                SettingItem::AudioDevice => {
+                    self.open_audio_selector();
+                }
+                SettingItem::Theme => {
+                    self.open_theme_selector();
+                }
+                SettingItem::TabOrder => {
+                    self.open_tab_order_selector();
+                }
+                SettingItem::ViewLogs => {
+                    self.open_log_viewer().await?;
+                }
+                _ => {}
             }
         }
         Ok(())
@@ -415,7 +412,6 @@ impl SettingsPage {
                 Constraint::Length(3), // Header
                 Constraint::Min(5),    // Settings list
                 Constraint::Length(3), // Current server info
-                Constraint::Length(4), // Connection info
                 Constraint::Length(3), // Web UI message
                 Constraint::Length(3), // Footer/status
             ])
@@ -424,13 +420,17 @@ impl SettingsPage {
         // Header
         let theme_colors = self.theme_manager.get_colors();
         let header = Paragraph::new("⚙️  Application Settings")
-            .style(Style::default().fg(theme_colors.accent).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(theme_colors.accent)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(Alignment::Center)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.accent)),
             );
         frame.render_widget(header, main_layout[0]);
 
@@ -440,28 +440,25 @@ impl SettingsPage {
         // Current server info
         self.render_current_server_info(frame, main_layout[2]);
 
-        // Connection info
-        self.render_connection_info(frame, main_layout[3]);
-
         // Web UI message
-        self.render_web_ui_message(frame, main_layout[4]);
+        self.render_web_ui_message(frame, main_layout[3]);
 
         // Footer with controls
-        self.render_footer(frame, main_layout[5]);
+        self.render_footer(frame, main_layout[4]);
 
         // Render popups if open
         if self.theme_selector_open {
             self.render_theme_selector(frame, area);
         }
-        
+
         if self.audio_selector_open {
             self.render_audio_selector(frame, area);
         }
-        
+
         if self.tab_order_selector_open {
             self.render_tab_order_selector(frame, area);
         }
-        
+
         if self.log_viewer_open {
             self.render_log_viewer(frame, area);
         }
@@ -476,11 +473,14 @@ impl SettingsPage {
             .map(|setting| {
                 let title = setting.title();
                 let description = setting.description();
-                
+
                 let value = match setting {
-                    SettingItem::AutoLoadEpisodes => {
-                        if settings.auto_load_episodes { "Enabled" } else { "Disabled" }.to_string()
+                    SettingItem::AutoLoadEpisodes => if settings.auto_load_episodes {
+                        "Enabled"
+                    } else {
+                        "Disabled"
                     }
+                    .to_string(),
                     SettingItem::DefaultVolume => {
                         format!("{}%", (settings.default_volume * 100.0) as u32)
                     }
@@ -489,7 +489,8 @@ impl SettingsPage {
                     }
                     SettingItem::AudioDevice => {
                         if let Some(device) = &settings.audio.selected_device {
-                            self.available_audio_devices.iter()
+                            self.available_audio_devices
+                                .iter()
                                 .find(|(name, _)| name == device)
                                 .map(|(_, display)| display.clone())
                                 .unwrap_or_else(|| device.clone())
@@ -497,44 +498,52 @@ impl SettingsPage {
                             "System Default".to_string()
                         }
                     }
-                    SettingItem::RemoteControlEnabled => {
-                        if settings.remote_control.enabled { "Enabled" } else { "Disabled" }.to_string()
+                    SettingItem::Theme => settings.theme.theme_name.clone(),
+                    SettingItem::UseBorders => if settings.theme.use_borders {
+                        "Enabled"
+                    } else {
+                        "Disabled"
                     }
-                    SettingItem::RemoteControlPort => {
-                        settings.remote_control.preferred_port.to_string()
-                    }
-                    SettingItem::Theme => {
-                        settings.theme.theme_name.clone()
-                    }
-                    SettingItem::UseBorders => {
-                        if settings.theme.use_borders { "Enabled" } else { "Disabled" }.to_string()
-                    }
+                    .to_string(),
                     SettingItem::TabOrder => {
                         format!("{} tabs configured", settings.ui.tab_order.len())
                     }
-                    SettingItem::ViewLogs => {
-                        "Click to view".to_string()
-                    }
+                    SettingItem::ViewLogs => "Click to view".to_string(),
                     SettingItem::VersionInfo => {
                         format!("{} v{}", PKG_NAME, VERSION)
                     }
                 };
 
                 let value_color = match setting {
-                    SettingItem::AutoLoadEpisodes | SettingItem::RemoteControlEnabled | SettingItem::UseBorders => {
-                        if value == "Enabled" { theme_colors.success } else { theme_colors.error }
+                    SettingItem::AutoLoadEpisodes | SettingItem::UseBorders => {
+                        if value == "Enabled" {
+                            theme_colors.success
+                        } else {
+                            theme_colors.error
+                        }
                     }
                     _ => theme_colors.primary,
                 };
 
                 let line1 = Line::from(vec![
-                    Span::styled(title, Style::default().fg(theme_colors.text).add_modifier(Modifier::BOLD)),
-                    Span::styled(format!(" → {}", value), Style::default().fg(value_color).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        title,
+                        Style::default()
+                            .fg(theme_colors.text)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" → {}", value),
+                        Style::default()
+                            .fg(value_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
                 ]);
 
-                let line2 = Line::from(vec![
-                    Span::styled(description, Style::default().fg(theme_colors.text_secondary)),
-                ]);
+                let line2 = Line::from(vec![Span::styled(
+                    description,
+                    Style::default().fg(theme_colors.text_secondary),
+                )]);
 
                 ListItem::new(Text::from(vec![line1, line2]))
             })
@@ -546,13 +555,13 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Settings")
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.highlight)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -573,21 +582,23 @@ impl SettingsPage {
         let controls = if self.theme_selector_open || self.audio_selector_open {
             Paragraph::new("↑/↓: Navigate • Enter: Select • Esc: Cancel")
         } else if self.tab_order_selector_open {
-            Paragraph::new("↑/↓: Navigate • u: Move up • d: Move down • r: Reset • Enter: Save • Esc: Cancel")
+            Paragraph::new(
+                "↑/↓: Navigate • u: Move up • d: Move down • r: Reset • Enter: Save • Esc: Cancel",
+            )
         } else if self.log_viewer_open {
             Paragraph::new("↑/↓: Scroll • r: Refresh • Esc: Close")
         } else {
             Paragraph::new("Enter: Select • ←/→: Adjust • +/-: Adjust • r: Reload • s: Save")
         }
-            .style(Style::default().fg(theme_colors.text_secondary))
-            .alignment(Alignment::Left)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title("Controls")
-                    .border_style(Style::default().fg(theme_colors.border))
-            );
+        .style(Style::default().fg(theme_colors.text_secondary))
+        .alignment(Alignment::Left)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title("Controls")
+                .border_style(Style::default().fg(theme_colors.border)),
+        );
         frame.render_widget(controls, layout[0]);
 
         // Status message
@@ -607,44 +618,15 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("Status")
-                    .border_style(Style::default().fg(theme_colors.border))
+                    .border_style(Style::default().fg(theme_colors.border)),
             );
         frame.render_widget(status, layout[1]);
-    }
-
-    fn render_connection_info(&self, frame: &mut Frame, area: Rect) {
-        let settings = self.settings_manager.get();
-        let theme_colors = self.theme_manager.get_colors();
-        let port = settings.remote_control.preferred_port;
-        
-        // Try to get local IP address
-        let ip_address = match local_ip_address::local_ip() {
-            Ok(ip) => ip.to_string(),
-            Err(_) => "127.0.0.1".to_string(),
-        };
-        
-        let connection_text = format!(
-            "Add this Firewood server to your PinePods instance:\nIP Address: {}  •  Port: {}",
-            ip_address, port
-        );
-        
-        let connection_info = Paragraph::new(connection_text)
-            .style(Style::default().fg(theme_colors.warning))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title("🔗 PinePods Integration")
-                    .border_style(Style::default().fg(theme_colors.primary))
-            );
-        frame.render_widget(connection_info, area);
     }
 
     fn render_theme_selector(&mut self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
         let available_themes = ThemeManager::available_themes();
-        
+
         // Create a popup in the center
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
@@ -654,7 +636,7 @@ impl SettingsPage {
                 Constraint::Percentage(20),
             ])
             .split(area)[1];
-            
+
         let popup_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -663,17 +645,15 @@ impl SettingsPage {
                 Constraint::Percentage(25),
             ])
             .split(popup_area)[1];
-        
+
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, popup_area);
-        
+
         let items: Vec<ListItem> = available_themes
             .iter()
-            .map(|&theme_name| {
-                ListItem::new(theme_name)
-            })
+            .map(|&theme_name| ListItem::new(theme_name))
             .collect();
-        
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -681,13 +661,13 @@ impl SettingsPage {
                     .border_type(BorderType::Rounded)
                     .title("🎨 Select Theme (Enter to select, Esc to cancel)")
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.primary)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -696,7 +676,7 @@ impl SettingsPage {
 
     fn render_audio_selector(&mut self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        
+
         // Create a popup in the center
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
@@ -706,7 +686,7 @@ impl SettingsPage {
                 Constraint::Percentage(30),
             ])
             .split(area)[1];
-            
+
         let popup_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -715,17 +695,16 @@ impl SettingsPage {
                 Constraint::Percentage(15),
             ])
             .split(popup_area)[1];
-        
+
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, popup_area);
-        
-        let items: Vec<ListItem> = self.available_audio_devices
+
+        let items: Vec<ListItem> = self
+            .available_audio_devices
             .iter()
-            .map(|(_, display_name)| {
-                ListItem::new(display_name.as_str())
-            })
+            .map(|(_, display_name)| ListItem::new(display_name.as_str()))
             .collect();
-        
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -733,13 +712,13 @@ impl SettingsPage {
                     .border_type(BorderType::Rounded)
                     .title("🔊 Select Audio Device (Enter to select, Esc to cancel)")
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.primary)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
@@ -750,12 +729,12 @@ impl SettingsPage {
         let theme_colors = self.theme_manager.get_colors();
         // Get server name from client if available
         let server_name = "your PinePods server"; // Could be enhanced to get actual server name
-        
+
         let message_text = format!(
             "Additional server settings available on the web UI at {}",
             server_name
         );
-        
+
         let web_ui_message = Paragraph::new(message_text)
             .style(Style::default().fg(theme_colors.accent))
             .alignment(Alignment::Center)
@@ -764,7 +743,7 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("🌐 Web Interface")
-                    .border_style(Style::default().fg(theme_colors.accent))
+                    .border_style(Style::default().fg(theme_colors.accent)),
             );
         frame.render_widget(web_ui_message, area);
     }
@@ -774,11 +753,14 @@ impl SettingsPage {
         // Set the current theme as selected in the dropdown
         let available_themes = ThemeManager::available_themes();
         let current_theme = self.settings_manager.theme_name();
-        if let Some(index) = available_themes.iter().position(|&theme| theme == current_theme) {
+        if let Some(index) = available_themes
+            .iter()
+            .position(|&theme| theme == current_theme)
+        {
             self.theme_selector_state.select(Some(index));
         }
     }
-    
+
     fn open_audio_selector(&mut self) {
         // Load audio devices only when opening the selector (lazy loading)
         self.available_audio_devices = get_available_audio_devices();
@@ -786,7 +768,11 @@ impl SettingsPage {
         // Set the current device as selected in the dropdown
         let current_device = self.settings_manager.selected_audio_device();
         if let Some(ref device) = current_device {
-            if let Some(index) = self.available_audio_devices.iter().position(|(name, _)| name == device) {
+            if let Some(index) = self
+                .available_audio_devices
+                .iter()
+                .position(|(name, _)| name == device)
+            {
                 self.audio_selector_state.select(Some(index));
             }
         } else {
@@ -806,7 +792,7 @@ impl SettingsPage {
                         let result = self.settings_manager.update(|s| {
                             s.theme.theme_name = theme_name.to_string();
                         });
-                        
+
                         match result {
                             Ok(_) => {
                                 self.theme_manager.set_theme(theme_name);
@@ -849,23 +835,24 @@ impl SettingsPage {
                 self.audio_selector_open = false;
             }
             KeyCode::Enter => {
-                if let Some(selected) = self.audio_selector_state.selected() {
-                    if let Some((device_name, display_name)) = self.available_audio_devices.get(selected) {
-                        let result = self.settings_manager.update(|s| {
-                            s.audio.selected_device = if device_name == "default" {
-                                None
-                            } else {
-                                Some(device_name.clone())
-                            };
-                        });
-                        
-                        match result {
-                            Ok(_) => {
-                                self.success_message = Some(format!("Audio device: {}", display_name));
-                            }
-                            Err(e) => {
-                                self.error_message = Some(format!("Failed to save: {}", e));
-                            }
+                if let Some(selected) = self.audio_selector_state.selected()
+                    && let Some((device_name, display_name)) =
+                        self.available_audio_devices.get(selected)
+                {
+                    let result = self.settings_manager.update(|s| {
+                        s.audio.selected_device = if device_name == "default" {
+                            None
+                        } else {
+                            Some(device_name.clone())
+                        };
+                    });
+
+                    match result {
+                        Ok(_) => {
+                            self.success_message = Some(format!("Audio device: {}", display_name));
+                        }
+                        Err(e) => {
+                            self.error_message = Some(format!("Failed to save: {}", e));
                         }
                     }
                 }
@@ -905,14 +892,14 @@ impl SettingsPage {
             self.settings_manager = new_settings_manager;
         }
     }
-    
+
     fn open_tab_order_selector(&mut self) {
         self.tab_order_selector_open = true;
         // Copy current tab order for editing
         self.tab_order_editing = self.settings_manager.tab_order().clone();
         self.tab_order_selector_state.select(Some(0));
     }
-    
+
     async fn handle_tab_order_selector_input(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -937,25 +924,28 @@ impl SettingsPage {
             }
             KeyCode::Char('u') => {
                 // Move selected tab up
-                if let Some(selected) = self.tab_order_selector_state.selected() {
-                    if selected > 0 && selected < self.tab_order_editing.len() {
-                        self.tab_order_editing.swap(selected, selected - 1);
-                        self.tab_order_selector_state.select(Some(selected - 1));
-                    }
+                if let Some(selected) = self.tab_order_selector_state.selected()
+                    && selected > 0
+                    && selected < self.tab_order_editing.len()
+                {
+                    self.tab_order_editing.swap(selected, selected - 1);
+                    self.tab_order_selector_state.select(Some(selected - 1));
                 }
             }
             KeyCode::Char('d') => {
                 // Move selected tab down
-                if let Some(selected) = self.tab_order_selector_state.selected() {
-                    if selected < self.tab_order_editing.len() - 1 {
-                        self.tab_order_editing.swap(selected, selected + 1);
-                        self.tab_order_selector_state.select(Some(selected + 1));
-                    }
+                if let Some(selected) = self.tab_order_selector_state.selected()
+                    && selected < self.tab_order_editing.len() - 1
+                {
+                    self.tab_order_editing.swap(selected, selected + 1);
+                    self.tab_order_selector_state.select(Some(selected + 1));
                 }
             }
             KeyCode::Enter => {
                 // Save current order and close
-                let result = self.settings_manager.set_tab_order(self.tab_order_editing.clone());
+                let result = self
+                    .settings_manager
+                    .set_tab_order(self.tab_order_editing.clone());
                 match result {
                     Ok(_) => {
                         self.success_message = Some("Tab order saved!".to_string());
@@ -977,10 +967,10 @@ impl SettingsPage {
         }
         Ok(())
     }
-    
+
     fn render_tab_order_selector(&mut self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        
+
         // Create a popup in the center with better sizing
         let popup_height = (self.tab_order_editing.len() as u16 + 7).min(area.height - 4); // +7 for borders, title, 2-line help
         let popup_area = Layout::default()
@@ -991,7 +981,7 @@ impl SettingsPage {
                 Constraint::Min(0),
             ])
             .split(area)[1];
-            
+
         let popup_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1000,20 +990,21 @@ impl SettingsPage {
                 Constraint::Percentage(15),
             ])
             .split(popup_area)[1];
-        
+
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, popup_area);
-        
+
         // Split the popup into list and help sections
         let popup_layout = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(3), // List area
+                Constraint::Min(3),    // List area
                 Constraint::Length(4), // Help text (2 lines + borders)
             ])
             .split(popup_area);
-        
-        let items: Vec<ListItem> = self.tab_order_editing
+
+        let items: Vec<ListItem> = self
+            .tab_order_editing
             .iter()
             .enumerate()
             .map(|(index, tab_name)| {
@@ -1021,7 +1012,7 @@ impl SettingsPage {
                 ListItem::new(format!("{}{}", prefix, tab_name))
             })
             .collect();
-        
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -1029,22 +1020,22 @@ impl SettingsPage {
                     .border_type(BorderType::Rounded)
                     .title("📑 Customize Tab Order")
                     .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme_colors.primary)
                     .fg(theme_colors.background)
-                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("► ");
 
         frame.render_stateful_widget(list, popup_layout[0], &mut self.tab_order_selector_state);
-        
+
         // Help text at the bottom (two lines)
         let help_lines = vec![
             Line::from("↑↓: Navigate • u: Move up • d: Move down • r: Reset"),
-            Line::from("Enter: Save and close • Esc: Cancel")
+            Line::from("Enter: Save and close • Esc: Cancel"),
         ];
         let help_text = Paragraph::new(help_lines)
             .style(Style::default().fg(theme_colors.text_secondary))
@@ -1054,24 +1045,29 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(theme_colors.border))
-                    .style(Style::default().bg(theme_colors.container))
+                    .style(Style::default().bg(theme_colors.container)),
             );
-        
+
         frame.render_widget(help_text, popup_layout[1]);
     }
-    
+
     fn render_current_server_info(&self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        
+
         // Get current server info from auth state
         let server_info = if let Some(ref session) = self.session_info {
             let server_name = &session.auth_state.server_name;
-            let username = session.auth_state.user_details.Username.as_deref().unwrap_or("Unknown");
+            let username = session
+                .auth_state
+                .user_details
+                .Username
+                .as_deref()
+                .unwrap_or("Unknown");
             format!("Connected to: {} as {}", server_name, username)
         } else {
             "No server connection info available".to_string()
         };
-        
+
         let server_info_widget = Paragraph::new(server_info)
             .style(Style::default().fg(theme_colors.success))
             .alignment(Alignment::Center)
@@ -1080,24 +1076,21 @@ impl SettingsPage {
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title("🌍 Current Server")
-                    .border_style(Style::default().fg(theme_colors.success))
+                    .border_style(Style::default().fg(theme_colors.success)),
             );
         frame.render_widget(server_info_widget, area);
     }
-    
+
     pub fn set_session_info(&mut self, session_info: crate::auth::SessionInfo) {
         self.session_info = Some(session_info);
     }
-    
+
     async fn open_log_viewer(&mut self) -> Result<()> {
         // Load log file contents
-        let log_file = std::path::PathBuf::from(
-            dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("pinepods")
-                .join("logs")
-                .join("pinepods.log")
-        );
+        let Some(log_file) = latest_log_file() else {
+            self.error_message = Some("No log file yet".to_string());
+            return Ok(());
+        };
         match std::fs::read_to_string(&log_file) {
             Ok(contents) => {
                 self.log_contents = contents.lines().map(|s| s.to_string()).collect();
@@ -1114,7 +1107,7 @@ impl SettingsPage {
         }
         Ok(())
     }
-    
+
     async fn handle_log_viewer_input(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -1151,10 +1144,10 @@ impl SettingsPage {
         }
         Ok(())
     }
-    
+
     fn render_log_viewer(&mut self, frame: &mut Frame, area: Rect) {
         let theme_colors = self.theme_manager.get_colors();
-        
+
         // Create a large popup for log viewing
         let popup_area = Layout::default()
             .direction(Direction::Vertical)
@@ -1164,7 +1157,7 @@ impl SettingsPage {
                 Constraint::Percentage(5),
             ])
             .split(area)[1];
-            
+
         let popup_area = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -1173,50 +1166,78 @@ impl SettingsPage {
                 Constraint::Percentage(5),
             ])
             .split(popup_area)[1];
-        
+
         // Clear the background
         frame.render_widget(ratatui::widgets::Clear, popup_area);
-        
+
         // Calculate visible lines
         let visible_height = popup_area.height.saturating_sub(4) as usize; // Account for borders and title
         let start_line = self.log_viewer_scroll;
         let end_line = (start_line + visible_height).min(self.log_contents.len());
-        
+
         let visible_lines: Vec<Line> = self.log_contents[start_line..end_line]
             .iter()
             .enumerate()
             .map(|(i, line)| {
                 let line_num = start_line + i + 1;
                 let display_line = if line.len() > popup_area.width.saturating_sub(10) as usize {
-                    format!("{}: {}...", line_num, &line[..(popup_area.width.saturating_sub(15) as usize)])
+                    format!(
+                        "{}: {}...",
+                        line_num,
+                        &line[..(popup_area.width.saturating_sub(15) as usize)]
+                    )
                 } else {
                     format!("{}: {}", line_num, line)
                 };
-                
+
                 // Color code log levels
                 if line.contains("ERROR") {
-                    Line::from(Span::styled(display_line, Style::default().fg(theme_colors.error)))
+                    Line::from(Span::styled(
+                        display_line,
+                        Style::default().fg(theme_colors.error),
+                    ))
                 } else if line.contains("WARN") {
-                    Line::from(Span::styled(display_line, Style::default().fg(theme_colors.warning)))
+                    Line::from(Span::styled(
+                        display_line,
+                        Style::default().fg(theme_colors.warning),
+                    ))
                 } else if line.contains("DEBUG") {
-                    Line::from(Span::styled(display_line, Style::default().fg(theme_colors.text_secondary)))
+                    Line::from(Span::styled(
+                        display_line,
+                        Style::default().fg(theme_colors.text_secondary),
+                    ))
                 } else {
-                    Line::from(Span::styled(display_line, Style::default().fg(theme_colors.text)))
+                    Line::from(Span::styled(
+                        display_line,
+                        Style::default().fg(theme_colors.text),
+                    ))
                 }
             })
             .collect();
-        
-        let log_paragraph = Paragraph::new(visible_lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .title(format!("📝 Application Logs ({}/{} lines) - Esc: Close, r: Refresh", 
-                           end_line, self.log_contents.len()))
-                    .border_style(Style::default().fg(theme_colors.accent))
-                    .style(Style::default().bg(theme_colors.container))
-            );
-        
+
+        let log_paragraph = Paragraph::new(visible_lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .title(format!(
+                    "📝 Application Logs ({}/{} lines) - Esc: Close, r: Refresh",
+                    end_line,
+                    self.log_contents.len()
+                ))
+                .border_style(Style::default().fg(theme_colors.accent))
+                .style(Style::default().bg(theme_colors.container)),
+        );
+
         frame.render_widget(log_paragraph, popup_area);
     }
+}
+
+/// The most recent of the daily log files.
+fn latest_log_file() -> Option<std::path::PathBuf> {
+    std::fs::read_dir(crate::paths::log_dir().ok()?)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with("firewood"))
+        .max_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok())
+        .map(|entry| entry.path())
 }

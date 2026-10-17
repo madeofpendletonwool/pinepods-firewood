@@ -1,252 +1,198 @@
-use anyhow::Result;
-use crossterm::{
-    event::{self, DisableMouseCapture, Event, KeyEventKind},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use ratatui::{
-    prelude::{CrosstermBackend, Terminal},
-};
-use std::{
-    io,
-    time::{Duration, Instant},
-    fs,
-};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
+use anyhow::{Context, Result};
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use tracing_appender::non_blocking::WorkerGuard;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::EnvFilter;
+
+use pinepods_firewood::api::http::build_client;
+use pinepods_firewood::api::{HttpApi, PinepodsApi};
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
+use pinepods_firewood::paths;
+use pinepods_firewood::playback::{Playback, PlaybackConfig};
+use pinepods_firewood::settings::SettingsManager;
+use pinepods_firewood::stderr::StderrRedirect;
 use pinepods_firewood::tui::TuiApp;
-use pinepods_firewood::remote::RemoteControlServer;
-use pinepods_firewood::config::{get_preferred_remote_port, is_remote_control_enabled};
 
-pub fn get_log_file_path() -> std::path::PathBuf {
-    let app_data_dir = dirs::data_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("pinepods");
-    app_data_dir.join("logs").join("pinepods.log")
-}
+const LOG_FILES_KEPT: usize = 7;
 
-fn setup_logging() -> Result<std::path::PathBuf> {
-    // Get log file path
-    let log_file = get_log_file_path();
-    
-    // Create logs directory if it doesn't exist
-    if let Some(logs_dir) = log_file.parent() {
-        fs::create_dir_all(logs_dir)?;
-    }
-    
-    // Set up fern logger
-    fern::Dispatch::new()
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "{}[{}][{}] {}",
-                chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),
-                record.target(),
-                record.level(),
-                message
-            ))
-        })
-        .level(log::LevelFilter::Info)
-        .level_for("pinepods_firewood", log::LevelFilter::Debug)
-        .chain(
-            fern::Dispatch::new()
-                .chain(std::fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .append(true)
-                    .open(&log_file)?)
-        )
-        .apply()?;
-        
-    log::info!("Logging initialized, writing to: {}", log_file.display());
-    Ok(log_file)
+/// Logs go to a daily file. `FIREWOOD_LOG` takes an `EnvFilter` directive
+/// (`debug`, `pinepods_firewood=trace`, …); the default is `info`.
+fn setup_logging() -> Result<WorkerGuard> {
+    let appender = RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("firewood")
+        .filename_suffix("log")
+        .max_log_files(LOG_FILES_KEPT)
+        .build(paths::log_dir()?)
+        .context("couldn't open the log file")?;
+    let (writer, guard) = tracing_appender::non_blocking(appender);
+    let filter = EnvFilter::try_from_env("FIREWOOD_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(writer)
+        .with_ansi(false)
+        .init();
+    Ok(guard)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize file-based logging
-    let _log_file = setup_logging()?;
+    let _log_guard = setup_logging()?;
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
-    // Set up panic hook to capture panic messages
-    std::panic::set_hook(Box::new(|panic_info| {
-        eprintln!("PANIC: {:?}", panic_info);
-        if let Some(location) = panic_info.location() {
-            eprintln!("PANIC LOCATION: {}:{}:{}", location.file(), location.line(), location.column());
-        }
-        if let Some(msg) = panic_info.payload().downcast_ref::<&str>() {
-            eprintln!("PANIC MESSAGE: {}", msg);
-        }
-        std::process::exit(1);
+    let log_dir = paths::log_dir()?;
+    let crash_note = format!("Firewood crashed. Details are in {}", log_dir.display());
+    std::panic::set_hook(Box::new(move |info| {
+        tracing::error!("panic: {info}");
+        // stderr is redirected while the TUI runs, so say it on stdout.
+        println!("{crash_note}");
     }));
 
-    // Setup terminal
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, DisableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    // Installs a panic hook of its own that restores the terminal before ours runs.
+    let mut terminal = ratatui::try_init()?;
+    let stderr = StderrRedirect::to_file(&log_dir.join("stderr.log"));
+    let result = run(&mut terminal).await;
+    drop(stderr);
+    ratatui::restore();
 
-    // Run the application
-    let result = run_app(&mut terminal).await;
-
-    // Restore terminal
-    disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
-    terminal.show_cursor()?;
-
-    // Handle any errors
-    if let Err(err) = result {
-        eprintln!("Application error: {:?}", err);
+    if let Err(err) = &result {
+        tracing::error!("exiting with error: {err:#}");
     }
-
-    Ok(())
+    result
 }
 
-async fn run_app<B: ratatui::prelude::Backend>(terminal: &mut Terminal<B>) -> Result<()> {
-    // First, try to authenticate
-    let session_info = authenticate(terminal).await?;
-    
-    // Create and run the main TUI application
-    let mut app = TuiApp::new(session_info)?;
-    app.initialize().await?;
-    
-    run_main_app(terminal, app).await
+async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
+    let Some(session) = authenticate(terminal).await? else {
+        return Ok(());
+    };
+
+    let http = build_client()?;
+    let auth = &session.auth_state;
+    let api: Arc<dyn PinepodsApi> = Arc::new(HttpApi::new(
+        http.clone(),
+        &auth.server_name,
+        auth.api_key.clone(),
+        i64::from(auth.user_details.UserID),
+    ));
+
+    let settings = SettingsManager::new().unwrap_or_else(|e| {
+        tracing::warn!("couldn't load settings, using defaults: {e:#}");
+        SettingsManager::with_defaults()
+    });
+    let playback = Playback::start(
+        api.clone(),
+        http,
+        PlaybackConfig {
+            device: settings.selected_audio_device(),
+            volume: settings.default_volume(),
+        },
+    )
+    .context("couldn't start audio")?;
+
+    let mut app = TuiApp::new(session, api, playback.clone(), settings);
+    if let Err(e) = app.initialize().await {
+        tracing::warn!("couldn't load the library: {e:#}");
+        app.show_error_message(&format!("Couldn't load your library: {e}"));
+    }
+    let terminated = Arc::new(AtomicBool::new(false));
+    watch_for_termination(terminated.clone(), playback.clone());
+    let result = run_main_app(terminal, app, &terminated).await;
+    playback.shutdown().await;
+    result
 }
 
-async fn authenticate<B: ratatui::prelude::Backend>(terminal: &mut Terminal<B>) -> Result<SessionInfo> {
-    let mut login_tui = LoginTui::new();
-    
-    // Check for existing authentication
-    if let Some(session_info) = login_tui.check_existing_auth().await? {
-        return Ok(session_info);
+/// Returns `None` if the user quits from the login screen.
+async fn authenticate(terminal: &mut DefaultTerminal) -> Result<Option<SessionInfo>> {
+    let mut login = LoginTui::new()?;
+    if let Some(session) = login.check_existing_auth().await {
+        return Ok(Some(session));
     }
-    
-    // Run login flow
-    let tick_rate = Duration::from_millis(100);
-    let mut last_tick = Instant::now();
-    
+
     loop {
-        terminal.draw(|f| login_tui.render(f, f.size()))?;
-        
-        let timeout = tick_rate
-            .checked_sub(last_tick.elapsed())
-            .unwrap_or_else(|| Duration::from_secs(0));
-            
-        if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    // Handle quit
-                    match key.code {
-                        crossterm::event::KeyCode::Char('q') => {
-                            return Err(anyhow::anyhow!("User quit during login"));
-                        }
-                        crossterm::event::KeyCode::Esc => {
-                            return Err(anyhow::anyhow!("User cancelled login"));
-                        }
-                        _ => {}
-                    }
-                    
-                    // Handle login input
-                    if let Some(session_info) = login_tui.handle_input(key).await? {
-                        return Ok(session_info);
-                    }
-                }
-            }
+        terminal.draw(|f| login.render(f, f.area()))?;
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
         }
-        
-        if last_tick.elapsed() >= tick_rate {
-            last_tick = Instant::now();
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        // Every printable key belongs to the input fields, so quitting is Ctrl+C only.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            return Ok(None);
+        }
+        if let Some(session) = login.handle_input(key).await? {
+            return Ok(Some(session));
         }
     }
 }
 
-async fn run_main_app<B: ratatui::prelude::Backend>(
-    terminal: &mut Terminal<B>, 
-    mut app: TuiApp
+async fn run_main_app(
+    terminal: &mut DefaultTerminal,
+    mut app: TuiApp,
+    terminated: &AtomicBool,
 ) -> Result<()> {
     let tick_rate = Duration::from_millis(50);
     let mut last_tick = Instant::now();
-    
-    // Try to start the remote control server (optional)
-    let remote_handle = if is_remote_control_enabled() {
-        let client = app.client().clone();
-        let audio_player = app.audio_player().clone();
-        let preferred_port = get_preferred_remote_port();
-        
-        match RemoteControlServer::new(
-            Some(audio_player),
-            Some(client),
-            Some(preferred_port),
-        ) {
-        Ok(mut remote_server) => {
-            let allocated_port = remote_server.get_port();
-            // Spawn the remote control server in the background
-            let handle = tokio::spawn(async move {
-                if let Err(e) = remote_server.start().await {
-                    log::error!("Remote control server failed: {}", e);
-                }
-            });
-            log::info!("Remote control server started on port {}", allocated_port);
-            Some(handle)
-        }
-        Err(e) => {
-            let error_msg = format!("Failed to create remote control server: {}", e);
-            log::warn!("{}", error_msg);
-            app.show_error_message(&error_msg);
-            log::info!("Continuing without remote control functionality");
-            None
-        }
-        }
-    } else {
-        log::info!("Remote control server disabled via configuration");
-        None
-    };
-    
-    log::info!("Use Ctrl+C or 'q' to quit");
-    
-    // Main TUI loop
-    let main_result = async {
-        loop {
-            terminal.draw(|f| app.render(f))?;
-            
-            let timeout = tick_rate
-                .checked_sub(last_tick.elapsed())
-                .unwrap_or_else(|| Duration::from_secs(0));
-                
-            if crossterm::event::poll(timeout)? {
-                if let Event::Key(key) = event::read()? {
-                    if key.kind == KeyEventKind::Press {
-                        app.handle_input(key).await?;
-                        
-                        if app.should_quit() {
-                            break;
-                        }
-                    }
-                }
-            }
-            
-            if last_tick.elapsed() >= tick_rate {
-                app.update().await?;
-                last_tick = Instant::now();
+
+    while !terminated.load(Ordering::Relaxed) {
+        terminal.draw(|f| app.render(f))?;
+
+        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+            && key.kind == KeyEventKind::Press
+        {
+            app.handle_input(key).await?;
+            if app.should_quit() {
+                break;
             }
         }
-        Ok::<(), anyhow::Error>(())
-    }.await;
-    
-    // Gracefully stop the remote control server if it was started
-    if let Some(handle) = remote_handle {
-        log::info!("Shutting down remote control server...");
-        // Give it a moment to clean up
-        if tokio::time::timeout(Duration::from_secs(2), async {
-            handle.abort();
-            // The abort will trigger cleanup in the Drop impl
-        }).await.is_err() {
-            log::warn!("Remote control server shutdown timed out");
+
+        if last_tick.elapsed() >= tick_rate {
+            app.update().await?;
+            last_tick = Instant::now();
         }
     }
-    
-    main_result
+    Ok(())
+}
+
+/// Signals should still save the position rather than kill the process outright.
+///
+/// SIGTERM (`kill`, a service manager) ends the main loop so the terminal is restored
+/// normally. SIGHUP means the terminal is gone: crossterm then spins on a dead tty
+/// instead of returning from `poll`, so the loop would never notice a flag. Save and
+/// exit from here instead.
+fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback) {
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut hup)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::hangup()),
+        ) else {
+            tracing::warn!("couldn't install signal handlers");
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {
+                tracing::info!("received SIGTERM");
+                flag.store(true, Ordering::Relaxed);
+            }
+            _ = hup.recv() => {
+                tracing::info!("terminal closed; saving and exiting");
+                playback.shutdown().await;
+                std::process::exit(0);
+            }
+        }
+    });
+    #[cfg(not(unix))]
+    let _ = (flag, playback);
 }

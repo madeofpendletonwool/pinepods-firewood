@@ -1,0 +1,32 @@
+{
+  "pods": [
+    {
+      "podcastid": 1,
+      "podcastname": "Complete",
+      "artworkurl": "https://example.com/a.jpg",
+      "author": "Someone",
+      "categories": {"1": "Technology", "2": "News"},
+      "description": "About",
+      "episodecount": 42,
+      "explicit": false,
+      "feedurl": "https://example.com/feed.xml",
+      "websiteurl": "https://example.com",
+      "podcastindexid": 1234,
+      "is_favorite": false,
+      "is_video": false
+    },
+    {
+      "podcastid": 2,
+      "podcastname": "Sparse feed",
+      "artworkurl": null,
+      "author": null,
+      "categories": "",
+      "description": null,
+      "episodecount": null,
+      "explicit": 1,
+      "feedurl": "https://example.com/sparse.xml",
+      "websiteurl": null,
+      "podcastindexid": null
+    }
+  ]
+}

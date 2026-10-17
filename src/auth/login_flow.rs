@@ -1,395 +1,227 @@
-use anyhow::Result;
-use super::{AuthManager, models::*};
+//! The login state machine behind the login screen.
 
-#[derive(Debug, Clone)]
-pub enum LoginState {
-    ServerEntry,
-    ServerVerification,
-    SelfServiceCheck,
-    FirstAdminSetup,
-    CredentialEntry,
-    Authentication,
-    MfaRequired {
-        server_name: String,
-        username: String,
-        user_id: i32,
-        mfa_session_token: String,
-    },
-    MfaEntry,
-    FirstTimeSetup {
-        auth_state: AuthState,
-    },
-    TimeZoneSetup {
-        auth_state: AuthState,
-    },
-    Complete {
-        session_info: SessionInfo,
-    },
-    Error(String),
-}
+use anyhow::Result;
+
+use super::auth_manager::{AuthManager, LoginOutcome, hash_password};
+use super::models::*;
+use super::session_storage::SessionStorage;
+use crate::api::http::normalize_server_url;
 
 #[derive(Debug, Clone)]
 pub enum LoginResult {
-    Success(SessionInfo),
+    Success(Box<SessionInfo>),
     ServerVerified,
-    MfaRequired {
-        server_name: String,
-        username: String,
-        user_id: i32,
-        mfa_session_token: String,
-    },
-    FirstAdminRequired {
-        server_name: String,
-    },
-    FirstTimeSetup {
-        auth_state: AuthState,
-    },
+    MfaRequired,
+    FirstAdminRequired,
+    /// Logged in, but the account hasn't been through first-run setup yet.
+    FirstTimeSetup,
     Error(String),
 }
 
+/// What the flow is waiting on between screens.
+enum Pending {
+    None,
+    Mfa {
+        server: String,
+        mfa_session_token: String,
+    },
+    Setup(Box<AuthState>),
+}
+
 pub struct LoginFlow {
-    pub auth_manager: AuthManager,
-    state: LoginState,
+    auth: AuthManager,
+    pending: Pending,
 }
 
 impl LoginFlow {
-    pub fn new() -> Self {
-        Self {
-            auth_manager: AuthManager::new(),
-            state: LoginState::ServerEntry,
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            auth: AuthManager::new()?,
+            pending: Pending::None,
+        })
+    }
+
+    pub async fn verify_server(&mut self, server: &str) -> LoginResult {
+        let server = normalize_server_url(server);
+        if let Err(e) = self.auth.verify_pinepods_instance(&server).await {
+            return LoginResult::Error(format!("Couldn't verify the server: {e:#}"));
+        }
+        match self.auth.check_self_service_status(&server).await {
+            Ok((true, false)) => LoginResult::FirstAdminRequired,
+            Ok(_) => LoginResult::ServerVerified,
+            Err(e) => LoginResult::Error(format!("Couldn't check the server's setup: {e:#}")),
         }
     }
 
-    pub fn state(&self) -> &LoginState {
-        &self.state
-    }
-
-    pub async fn check_existing_auth(&mut self) -> Result<Option<SessionInfo>> {
-        match self.auth_manager.load_auth_state().await {
-            Ok(auth_state) => {
-                // Check if it's a first login and timezone setup
-                let first_login_done = self.auth_manager
-                    .call_first_login_done(auth_state.server_name.clone(), auth_state.api_key.clone(), 
-                                     &auth_state.user_details.UserID)
-                    .await
-                    .unwrap_or(false);
-                
-                let timezone_configured = self.auth_manager
-                    .get_time_info(&auth_state.server_name, &auth_state.api_key, 
-                                 auth_state.user_details.UserID)
-                    .await
-                    .is_ok();
-
-                let session_info = SessionInfo {
-                    auth_state,
-                    is_first_login: !first_login_done, // Inverted: if first_login_done is false, it IS first login
-                    timezone_configured,
-                };
-
-                Ok(Some(session_info))
-            }
-            Err(_) => Ok(None),
-        }
-    }
-
-    pub async fn verify_server(&mut self, server_name: &str) -> Result<LoginResult> {
-        self.state = LoginState::ServerVerification;
-        
-        // Step 1: Verify Pinepods instance
-        match self.auth_manager.verify_pinepods_instance(server_name).await {
-            Ok(_) => {
-                // Step 2: Check self-service status
-                match self.auth_manager.check_self_service_status(server_name).await {
-                    Ok((self_service_enabled, first_admin_created)) => {
-                        if self_service_enabled && !first_admin_created {
-                            self.state = LoginState::FirstAdminSetup;
-                            Ok(LoginResult::FirstAdminRequired {
-                                server_name: server_name.to_string(),
-                            })
-                        } else {
-                            self.state = LoginState::CredentialEntry;
-                            // Server verified, but authentication not complete yet
-                            Ok(LoginResult::ServerVerified)
-                        }
-                    }
-                    Err(e) => {
-                        self.state = LoginState::Error(format!("Self-service check failed: {}", e));
-                        Ok(LoginResult::Error(format!("Self-service check failed: {}", e)))
-                    }
-                }
-            }
-            Err(e) => {
-                self.state = LoginState::Error(format!("Server verification failed: {}", e));
-                Ok(LoginResult::Error(format!("Server verification failed: {}", e)))
-            }
-        }
-    }
-
-    pub async fn create_first_admin(&mut self, server_name: &str, username: String, 
-        password: String, email: String, fullname: String) -> Result<LoginResult> {
-        
-        // Hash the password (you'll need to implement password hashing)
-        let hashed_password = hash_password(&password)?;
-        
-        let request = CreateFirstAdminRequest {
-            username: username.clone(),
-            password: hashed_password,
-            email,
-            fullname,
+    pub async fn create_first_admin(
+        &mut self,
+        server: &str,
+        username: String,
+        password: String,
+        email: String,
+        fullname: String,
+    ) -> LoginResult {
+        let server = normalize_server_url(server);
+        let request = match hash_password(&password) {
+            Ok(hashed) => CreateFirstAdminRequest {
+                username: username.clone(),
+                password: hashed,
+                email,
+                fullname,
+            },
+            Err(e) => return LoginResult::Error(e.to_string()),
         };
-
-        match self.auth_manager.create_first_admin(server_name, request).await {
-            Ok(_) => {
-                // Now proceed with normal login
-                self.authenticate(server_name, &username, &password).await
-            }
-            Err(e) => {
-                self.state = LoginState::Error(format!("Failed to create admin: {}", e));
-                Ok(LoginResult::Error(format!("Failed to create admin: {}", e)))
-            }
+        if let Err(e) = self.auth.create_first_admin(&server, request).await {
+            return LoginResult::Error(format!("{e:#}"));
         }
+        self.authenticate(&server, &username, &password).await
     }
 
-    pub async fn authenticate(&mut self, server_name: &str, username: &str, password: &str) 
-        -> Result<LoginResult> {
-        self.state = LoginState::Authentication;
-        
-        match self.auth_manager.login_new_server_secure(
-            server_name.to_string(), 
-            username.to_string(), 
-            password.to_string()
-        ).await {
-            Ok(super::auth_manager::AuthManagerResult::Success(user_details, login_request, server_details)) => {
-                // Create auth state
-                let api_key = login_request.api_key.clone().unwrap();
-                let auth_state = AuthState {
-                    server_name: server_name.to_string(),
-                    api_key: api_key.clone(),
-                    user_details: user_details.clone(),
-                    server_details,
-                    login_request,
-                };
-
-                // Check if it's first time login - if first_login_done is TRUE, user has already completed setup
-                let first_login_done = self.auth_manager
-                    .call_first_login_done(server_name.to_string(), auth_state.api_key.clone(), &user_details.UserID)
-                    .await
-                    .unwrap_or(false);
-
-                if !first_login_done {
-                    // User has NOT completed first login setup yet
-                    self.state = LoginState::FirstTimeSetup { 
-                        auth_state: auth_state.clone() 
-                    };
-                    return Ok(LoginResult::FirstTimeSetup { auth_state });
-                }
-
-                // Check timezone configuration
-                let timezone_configured = self.auth_manager
-                    .get_time_info(&server_name, &auth_state.api_key, user_details.UserID)
-                    .await
-                    .is_ok();
-
-                if !timezone_configured {
-                    self.state = LoginState::TimeZoneSetup { 
-                        auth_state: auth_state.clone() 
-                    };
-                }
-
-                let session_info = SessionInfo {
-                    auth_state,
-                    is_first_login: !first_login_done,
-                    timezone_configured,
-                };
-
-                // Save auth state to both old system and new session storage
-                if let Err(e) = self.auth_manager.save_auth_state(&session_info.auth_state).await {
-                    log::warn!("Failed to save auth state: {}", e);
-                }
-                
-                // Save to session storage for persistence
-                if let Err(e) = super::SessionStorage::save_session(&session_info.auth_state) {
-                    log::warn!("Failed to save session: {}", e);
-                }
-
-                self.state = LoginState::Complete { 
-                    session_info: session_info.clone() 
-                };
-                
-                Ok(LoginResult::Success(session_info))
-            }
-            Ok(super::auth_manager::AuthManagerResult::MfaRequired { server_name, username, user_id, mfa_session_token }) => {
-                let mfa_state = LoginState::MfaRequired {
-                    server_name: server_name.clone(),
-                    username: username.clone(),
-                    user_id,
-                    mfa_session_token: mfa_session_token.clone(),
-                };
-                self.state = mfa_state;
-                
-                Ok(LoginResult::MfaRequired {
-                    server_name,
-                    username,
-                    user_id,
+    pub async fn authenticate(
+        &mut self,
+        server: &str,
+        username: &str,
+        password: &str,
+    ) -> LoginResult {
+        let server = normalize_server_url(server);
+        match self.auth.login(&server, username, password).await {
+            Ok(LoginOutcome::Key(api_key)) => self.finish(server, api_key).await,
+            Ok(LoginOutcome::MfaRequired {
+                mfa_session_token, ..
+            }) => {
+                self.pending = Pending::Mfa {
+                    server,
                     mfa_session_token,
-                })
+                };
+                LoginResult::MfaRequired
             }
+            Err(e) => LoginResult::Error(format!("Login failed: {e:#}")),
+        }
+    }
+
+    pub async fn verify_mfa(&mut self, code: &str) -> LoginResult {
+        let Pending::Mfa {
+            server,
+            mfa_session_token,
+        } = std::mem::replace(&mut self.pending, Pending::None)
+        else {
+            return LoginResult::Error("Log in again to get a new MFA prompt".into());
+        };
+        match self
+            .auth
+            .verify_mfa(&server, mfa_session_token.clone(), code.to_string())
+            .await
+        {
+            Ok(api_key) => self.finish(server, api_key).await,
             Err(e) => {
-                self.state = LoginState::Error(format!("Authentication failed: {}", e));
-                Ok(LoginResult::Error(format!("Authentication failed: {}", e)))
+                // Keep the MFA session so the user can retype the code.
+                self.pending = Pending::Mfa {
+                    server,
+                    mfa_session_token,
+                };
+                LoginResult::Error(format!("MFA failed: {e:#}"))
             }
         }
     }
 
-    pub async fn verify_mfa(&mut self, mfa_code: &str) -> Result<LoginResult> {
-        if let LoginState::MfaRequired { server_name, username, user_id: _, mfa_session_token } = self.state.clone() {
-            self.state = LoginState::MfaEntry;
-            
-            match self.auth_manager.call_verify_mfa_and_get_key(
-                &server_name, 
-                mfa_session_token, 
-                mfa_code.to_string()
-            ).await {
-                Ok(mfa_response) => {
-                    if !mfa_response.verified || mfa_response.status != "success" {
-                        self.state = LoginState::Error("MFA verification failed".to_string());
-                        return Ok(LoginResult::Error("MFA verification failed".to_string()));
-                    }
-                    
-                    let api_key = mfa_response.retrieved_key
-                        .ok_or_else(|| anyhow::anyhow!("No API key returned after MFA"))?;
-                    
-                    // Complete login flow with verified API key
-                    self.complete_login(server_name, username, 
-                                      String::new(), api_key).await
-                }
-                Err(e) => {
-                    self.state = LoginState::Error(format!("MFA verification failed: {}", e));
-                    Ok(LoginResult::Error(format!("MFA verification failed: {}", e)))
-                }
-            }
-        } else {
-            Ok(LoginResult::Error("Invalid state for MFA verification".to_string()))
+    pub async fn setup_timezone(
+        &mut self,
+        timezone: String,
+        hour_pref: i32,
+        date_format: String,
+    ) -> LoginResult {
+        let Pending::Setup(auth_state) = &self.pending else {
+            return LoginResult::Error("Log in first".into());
+        };
+        let info = TimeZoneInfo {
+            user_id: auth_state.user_details.UserID,
+            timezone,
+            hour_pref,
+            date_format,
+        };
+        if let Err(e) = self
+            .auth
+            .setup_timezone_info(&auth_state.server_name, &auth_state.api_key, info)
+            .await
+        {
+            return LoginResult::Error(format!("Couldn't save the settings: {e:#}"));
         }
+        let Pending::Setup(auth_state) = std::mem::replace(&mut self.pending, Pending::None) else {
+            unreachable!("checked above");
+        };
+        Self::complete(*auth_state)
     }
 
-    async fn complete_login(&mut self, server_name: String, username: String, 
-        password: String, api_key: String) -> Result<LoginResult> {
-        
-        match self.auth_manager.complete_login_flow(
-            server_name.clone(), username, password, api_key.clone()
-        ).await {
-            Ok((user_details, login_request, server_details)) => {
-                let auth_state = AuthState {
-                    server_name: server_name.clone(),
-                    api_key: api_key.clone(),
-                    user_details: user_details.clone(),
-                    server_details,
-                    login_request,
-                };
+    async fn finish(&mut self, server: String, api_key: String) -> LoginResult {
+        let (user_details, server_details) = match self.auth.load_account(&server, &api_key).await {
+            Ok(account) => account,
+            Err(e) => return LoginResult::Error(format!("Couldn't load the account: {e:#}")),
+        };
+        let auth_state = AuthState {
+            server_name: server,
+            api_key,
+            user_details,
+            server_details,
+        };
+        let setup_done = self
+            .auth
+            .first_login_done(
+                &auth_state.server_name,
+                &auth_state.api_key,
+                auth_state.user_details.UserID,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!("first-login check failed, assuming setup is done: {e:#}");
+                true
+            });
+        if !setup_done {
+            self.pending = Pending::Setup(Box::new(auth_state));
+            return LoginResult::FirstTimeSetup;
+        }
+        Self::complete(auth_state)
+    }
 
-                // Check if it's first time login
-                let first_login_done = self.auth_manager
-                    .call_first_login_done(server_name.clone(), api_key.clone(), &user_details.UserID)
-                    .await
-                    .unwrap_or(false);
+    fn complete(auth_state: AuthState) -> LoginResult {
+        if let Err(e) = SessionStorage::save_session(&auth_state) {
+            tracing::warn!("couldn't save the session; you'll need to log in next time: {e:#}");
+        }
+        LoginResult::Success(Box::new(SessionInfo { auth_state }))
+    }
 
-                if !first_login_done {
-                    self.state = LoginState::FirstTimeSetup { 
-                        auth_state: auth_state.clone() 
-                    };
-                    return Ok(LoginResult::FirstTimeSetup { auth_state });
-                }
-
-                // Check timezone configuration
-                let timezone_configured = self.auth_manager
-                    .get_time_info(&server_name, &api_key, user_details.UserID)
-                    .await
-                    .is_ok();
-
-                if !timezone_configured {
-                    self.state = LoginState::TimeZoneSetup { 
-                        auth_state: auth_state.clone() 
-                    };
-                }
-
-                let session_info = SessionInfo {
-                    auth_state,
-                    is_first_login: !first_login_done,
-                    timezone_configured,
-                };
-
-                // Save auth state to both old system and new session storage
-                if let Err(e) = self.auth_manager.save_auth_state(&session_info.auth_state).await {
-                    log::warn!("Failed to save auth state: {}", e);
-                }
-                
-                // Save to session storage for persistence
-                if let Err(e) = super::SessionStorage::save_session(&session_info.auth_state) {
-                    log::warn!("Failed to save session: {}", e);
-                }
-
-                self.state = LoginState::Complete { 
-                    session_info: session_info.clone() 
-                };
-                
-                Ok(LoginResult::Success(session_info))
-            }
+    /// Restores the saved session. A revoked key clears it; an unreachable server keeps
+    /// it, so Firewood still starts when the server is down or the network is out.
+    pub async fn restore_session(&self) -> Option<SessionInfo> {
+        let auth_state = match SessionStorage::load_session() {
+            Ok(Some(auth)) => auth,
+            Ok(None) => return None,
             Err(e) => {
-                self.state = LoginState::Error(format!("Login completion failed: {}", e));
-                Ok(LoginResult::Error(format!("Login completion failed: {}", e)))
+                tracing::warn!("couldn't read the saved session: {e:#}");
+                return None;
             }
-        }
-    }
-
-    pub async fn setup_timezone(&mut self, timezone: String, hour_pref: i32, 
-        date_format: String) -> Result<LoginResult> {
-        
-        if let LoginState::TimeZoneSetup { auth_state } = &self.state {
-            let time_zone_info = TimeZoneInfo {
-                user_id: auth_state.user_details.UserID,
-                timezone,
-                hour_pref,
-                date_format,
-            };
-
-            match self.auth_manager.setup_timezone_info(
-                &auth_state.server_name, 
-                &auth_state.api_key, 
-                time_zone_info
-            ).await {
-                Ok(_) => {
-                    let mut session_info = SessionInfo {
-                        auth_state: auth_state.clone(),
-                        is_first_login: false,
-                        timezone_configured: true,
-                    };
-
-                    // Update auth state
-                    if let Err(e) = self.auth_manager.save_auth_state(&session_info.auth_state).await {
-                        log::warn!("Failed to save auth state: {}", e);
-                    }
-
-                    self.state = LoginState::Complete { 
-                        session_info: session_info.clone() 
-                    };
-                    
-                    Ok(LoginResult::Success(session_info))
+        };
+        match self
+            .auth
+            .verify_key(&auth_state.server_name, &auth_state.api_key)
+            .await
+        {
+            Ok(()) => {}
+            Err(e)
+                if matches!(
+                    e.downcast_ref::<crate::api::ApiError>(),
+                    Some(crate::api::ApiError::Unauthorized)
+                ) =>
+            {
+                tracing::warn!("the saved API key was rejected; logging out");
+                if let Err(e) = SessionStorage::clear_session() {
+                    tracing::warn!("couldn't clear the session: {e:#}");
                 }
-                Err(e) => {
-                    self.state = LoginState::Error(format!("Timezone setup failed: {}", e));
-                    Ok(LoginResult::Error(format!("Timezone setup failed: {}", e)))
-                }
+                return None;
             }
-        } else {
-            Ok(LoginResult::Error("Invalid state for timezone setup".to_string()))
+            Err(e) => tracing::warn!(
+                "couldn't reach the server to check the session; continuing offline: {e:#}"
+            ),
         }
+        Some(SessionInfo { auth_state })
     }
-}
-
-// Placeholder for password hashing - implement according to your needs
-fn hash_password(password: &str) -> Result<String> {
-    // This should match the password hashing used by the web client
-    // For now, returning the password as-is, but you should implement proper hashing
-    Ok(password.to_string())
 }
