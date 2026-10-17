@@ -1,0 +1,25 @@
+{
+  "data": [
+    {
+      "episodeid": 5, "episodetitle": "Second", "podcastname": "Show", "podcastid": 1,
+      "episodepubdate": "2026-01-02", "episodedescription": "", "episodeartwork": "",
+      "episodeurl": "https://example.com/5.mp3", "episodeduration": 100, "listenduration": null,
+      "completed": false, "saved": false, "queued": true, "downloaded": false, "is_youtube": false,
+      "queueposition": 2, "queuedate": "2026-01-03"
+    },
+    {
+      "episodeid": 5, "episodetitle": "A video with the same id", "podcastname": "Channel", "podcastid": 9,
+      "episodepubdate": "2026-01-01", "episodedescription": "", "episodeartwork": "",
+      "episodeurl": "https://youtube.com/watch?v=x", "episodeduration": 200, "listenduration": 50,
+      "completed": false, "saved": false, "queued": true, "downloaded": false, "is_youtube": true,
+      "queueposition": 1, "queuedate": "2026-01-02"
+    },
+    {
+      "episodeid": 6, "episodetitle": "Unpositioned", "podcastname": "Show", "podcastid": 1,
+      "episodepubdate": "2026-01-02", "episodedescription": "", "episodeartwork": null,
+      "episodeurl": "https://example.com/6.mp3", "episodeduration": 100, "listenduration": null,
+      "completed": false, "saved": false, "queued": true, "downloaded": false, "is_youtube": false,
+      "queueposition": null, "queuedate": null
+    }
+  ]
+}

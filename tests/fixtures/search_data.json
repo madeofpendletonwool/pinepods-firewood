@@ -1,0 +1,31 @@
+{
+  "data": [
+    {
+      "podcastid": 3,
+      "podcastname": "News Hour",
+      "artworkurl": "https://example.com/n.jpg",
+      "author": "A Network",
+      "categories": {"1": "News"},
+      "podcastdescription": "Daily news",
+      "episodecount": 900,
+      "feedurl": "https://example.com/news.xml",
+      "websiteurl": "https://example.com/news",
+      "explicit": 0,
+      "userid": 2,
+      "episodeid": 77,
+      "episodetitle": "Monday",
+      "episodedescription": "Headlines",
+      "episodeurl": "https://example.com/77.mp3",
+      "episodeartwork": "https://example.com/77.jpg",
+      "episodepubdate": null,
+      "episodeduration": 1500,
+      "listenduration": 30,
+      "completed": false,
+      "saved": false,
+      "queued": true,
+      "downloaded": false,
+      "is_youtube": false
+    }
+  ],
+  "total": 1
+}
