@@ -207,11 +207,13 @@ async fn run_main_app(
 /// SIGTERM (`kill`, a service manager) ends the main loop so the terminal is restored
 /// normally. SIGHUP means the terminal is gone: crossterm then spins on a dead tty
 /// instead of returning from `poll`, so the loop would never notice a flag. Save and
-/// exit from here instead.
+/// exit from here instead. That also covers a terminal that closes right after
+/// SIGTERM, and a loop that hasn't wound down a few seconds after it.
 fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback, remote: NowPlaying) {
     #[cfg(unix)]
     tokio::spawn(async move {
         use tokio::signal::unix::{SignalKind, signal};
+        const GRACE: Duration = Duration::from_secs(5);
         let (Ok(mut term), Ok(mut hup)) = (
             signal(SignalKind::terminate()),
             signal(SignalKind::hangup()),
@@ -223,13 +225,15 @@ fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback, remote: NowP
             _ = term.recv() => {
                 tracing::info!("received SIGTERM");
                 flag.store(true, Ordering::Relaxed);
+                tokio::select! {
+                    _ = hup.recv() => tracing::info!("terminal closed while exiting"),
+                    _ = tokio::time::sleep(GRACE) => tracing::warn!("still running after SIGTERM"),
+                }
             }
-            _ = hup.recv() => {
-                tracing::info!("terminal closed; saving and exiting");
-                tokio::join!(remote.shutdown(), playback.shutdown());
-                std::process::exit(0);
-            }
+            _ = hup.recv() => tracing::info!("terminal closed; saving and exiting"),
         }
+        tokio::join!(remote.shutdown(), playback.shutdown());
+        std::process::exit(0);
     });
     #[cfg(not(unix))]
     let _ = (flag, playback, remote);
