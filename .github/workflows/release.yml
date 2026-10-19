@@ -156,7 +156,7 @@ jobs:
           Version: ${VERSION}
           Release: 1%{?dist}
           Summary: Terminal UI client for PinePods podcast server
-          License: MIT
+          License: GPL-3.0-only
           URL: https://github.com/madeofpendletonwool/pinepods-firewood
           Source0: pinepods-firewood-linux-amd64.tar.gz
           
