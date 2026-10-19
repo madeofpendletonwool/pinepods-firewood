@@ -2,26 +2,29 @@
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
-    style::{Modifier, Style},
+    crossterm::event::MouseEvent,
+    layout::{Constraint, Layout, Rect},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, List, ListItem, ListState},
+    widgets::{Cell, Paragraph},
 };
 
+use super::keymap::Action;
+use super::text::truncate;
+use super::ui::{self, list::Click, list::ListView};
 use crate::api::Episode;
-use crate::nowplaying::NowPlaying;
-use crate::theme::ThemeColors;
+use crate::nowplaying::protocol::Device;
+use crate::theme::Theme;
 
 pub struct DevicePicker {
     episode: Episode,
-    list_state: ListState,
+    list: ListView,
 }
 
 impl DevicePicker {
     pub fn new(episode: Episode) -> Self {
         Self {
             episode,
-            list_state: ListState::default().with_selected(Some(0)),
+            list: ListView::default(),
         }
     }
 
@@ -29,80 +32,58 @@ impl DevicePicker {
         &self.episode
     }
 
-    pub fn selected(&self) -> usize {
-        self.list_state.selected().unwrap_or(0)
+    /// Devices come and go while the popup is open.
+    pub fn sync(&mut self, devices: &[Device]) {
+        self.list.sync(devices, |d| d.label().to_string());
     }
 
-    pub fn move_by(&mut self, step: isize, len: usize) {
-        if len == 0 {
-            return;
-        }
-        let next = (self.selected() as isize + step).clamp(0, len as isize - 1);
-        self.list_state.select(Some(next as usize));
+    pub fn navigate(&mut self, action: Action) {
+        self.list.navigate(action);
     }
 
-    pub fn render(
-        &mut self,
-        frame: &mut Frame,
-        area: Rect,
-        colors: &ThemeColors,
-        remote: &NowPlaying,
-    ) {
-        let devices = remote.state().devices;
-        // Devices can leave while the popup is open.
-        if self.selected() >= devices.len() {
-            self.list_state
-                .select(Some(devices.len().saturating_sub(1)));
-        }
+    pub fn mouse(&mut self, event: MouseEvent) -> Click {
+        self.list.mouse(event)
+    }
 
+    pub fn selected(&self) -> Option<usize> {
+        self.list.selected_index()
+    }
+
+    pub fn render(&mut self, frame: &mut Frame, area: Rect, theme: &Theme, devices: &[Device]) {
         let height = (devices.len() as u16).clamp(1, 8) + 4;
-        let [popup] = Layout::horizontal([Constraint::Percentage(60)])
-            .flex(Flex::Center)
-            .areas(area);
-        let [popup] = Layout::vertical([Constraint::Length(height)])
-            .flex(Flex::Center)
-            .areas(popup);
-
-        let items: Vec<ListItem> = devices
-            .iter()
-            .map(|device| {
+        let title = format!("Play on ▸ {}", truncate(&self.episode.episode_title, 40));
+        let inner = ui::popup(frame, ui::centered(area, 64, height), &title, theme);
+        let [rows, _, hint] = Layout::vertical([
+            Constraint::Min(0),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .areas(inner);
+        self.list.render(
+            frame,
+            rows,
+            theme,
+            &[Constraint::Fill(1), Constraint::Length(20)],
+            None,
+            |i, _| {
+                let device = &devices[i];
                 let state = match (device.episode(), device.playing) {
                     (None, _) => "idle",
                     (Some(_), true) => "playing",
                     (Some(_), false) => "paused",
                 };
-                ListItem::new(Line::from(vec![
-                    Span::styled(device.label().to_string(), Style::default().fg(colors.text)),
-                    Span::styled(
-                        format!("  {} · {state}", device.device_type),
-                        Style::default().fg(colors.text_secondary),
-                    ),
-                ]))
-            })
-            .collect();
-
-        let title = format!(
-            " Play on ▸ {} ",
-            crate::tui::text::truncate(&self.episode.episode_title, 40)
+                vec![
+                    Cell::from(device.label().to_string()),
+                    Cell::from(Span::styled(
+                        format!("{} · {state}", device.device_type),
+                        theme.muted(),
+                    )),
+                ]
+            },
         );
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(colors.accent))
-                    .title(title)
-                    .title_bottom(" Enter play there · Esc cancel ")
-                    .style(Style::default().bg(colors.container)),
-            )
-            .highlight_style(
-                Style::default()
-                    .bg(colors.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("► ");
-
-        frame.render_widget(Clear, popup);
-        frame.render_stateful_widget(list, popup, &mut self.list_state);
+        frame.render_widget(
+            Paragraph::new(Line::styled("Enter play there · Esc cancel", theme.faint())),
+            hint,
+        );
     }
 }

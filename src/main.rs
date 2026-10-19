@@ -4,7 +4,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEventKind, KeyModifiers,
+};
+use ratatui::crossterm::execute;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
@@ -17,7 +21,7 @@ use pinepods_firewood::paths;
 use pinepods_firewood::playback::{Playback, PlaybackConfig};
 use pinepods_firewood::settings::SettingsManager;
 use pinepods_firewood::stderr::StderrRedirect;
-use pinepods_firewood::tui::TuiApp;
+use pinepods_firewood::tui::App;
 
 const LOG_FILES_KEPT: usize = 7;
 
@@ -52,15 +56,32 @@ async fn main() -> Result<()> {
     let crash_note = format!("Firewood crashed. Details are in {}", log_dir.display());
     std::panic::set_hook(Box::new(move |info| {
         tracing::error!("panic: {info}");
+        let _ = execute!(
+            std::io::stdout(),
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
         // stderr is redirected while the TUI runs, so say it on stdout.
         println!("{crash_note}");
     }));
 
     // Installs a panic hook of its own that restores the terminal before ours runs.
     let mut terminal = ratatui::try_init()?;
+    // Mouse capture means selecting text needs Shift (Option in some macOS
+    // terminals), so it can be turned off.
+    let mouse = std::env::var_os("FIREWOOD_NO_MOUSE").is_none();
+    if mouse {
+        execute!(std::io::stdout(), EnableMouseCapture)?;
+    }
+    execute!(std::io::stdout(), EnableBracketedPaste)?;
     let stderr = StderrRedirect::to_file(&log_dir.join("stderr.log"));
     let result = run(&mut terminal).await;
     drop(stderr);
+    let _ = execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableBracketedPaste
+    );
     ratatui::restore();
 
     if let Err(err) = &result {
@@ -106,11 +127,7 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         playback.clone(),
     );
 
-    let mut app = TuiApp::new(session, api, playback.clone(), remote.clone(), settings);
-    if let Err(e) = app.initialize().await {
-        tracing::warn!("couldn't load the library: {e:#}");
-        app.show_error_message(&format!("Couldn't load your library: {e}"));
-    }
+    let app = App::new(&session, api, playback.clone(), remote.clone(), settings);
     let terminated = Arc::new(AtomicBool::new(false));
     watch_for_termination(terminated.clone(), playback.clone(), remote.clone());
     let result = run_main_app(terminal, app, &terminated).await;
@@ -146,31 +163,40 @@ async fn authenticate(terminal: &mut DefaultTerminal) -> Result<Option<SessionIn
     }
 }
 
+/// Draws every frame on time: nothing in the app waits on the network, so a frame
+/// is due every [`FRAME`] whether or not input arrived.
 async fn run_main_app(
     terminal: &mut DefaultTerminal,
-    mut app: TuiApp,
+    mut app: App,
     terminated: &AtomicBool,
 ) -> Result<()> {
-    let tick_rate = Duration::from_millis(50);
-    let mut last_tick = Instant::now();
+    const FRAME: Duration = Duration::from_millis(50);
+    let mut next_frame = Instant::now();
 
-    while !terminated.load(Ordering::Relaxed) {
-        terminal.draw(|f| app.render(f))?;
-
-        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            app.handle_input(key).await?;
-            if app.should_quit() {
-                break;
-            }
+    while !terminated.load(Ordering::Relaxed) && !app.should_quit() {
+        if Instant::now() >= next_frame {
+            app.tick();
+            terminal.draw(|f| app.render(f))?;
+            next_frame = Instant::now() + FRAME;
         }
-
-        if last_tick.elapsed() >= tick_rate {
-            app.update().await?;
-            last_tick = Instant::now();
+        // Waiting here blocks this worker thread; the runtime has others for the
+        // network and the socket.
+        let timeout = next_frame.saturating_duration_since(Instant::now());
+        if !tokio::task::block_in_place(|| event::poll(timeout))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) => app.key(key),
+            Event::Mouse(mouse) => app.mouse(mouse),
+            Event::Paste(text) => app.paste(&text),
+            // Redraw at the new size right away.
+            Event::Resize(..) => next_frame = Instant::now(),
+            _ => {}
+        }
+        // Show the effect of input without waiting for the next frame.
+        if Instant::now() + Duration::from_millis(10) < next_frame {
+            app.tick();
+            terminal.draw(|f| app.render(f))?;
         }
     }
     Ok(())
@@ -181,11 +207,13 @@ async fn run_main_app(
 /// SIGTERM (`kill`, a service manager) ends the main loop so the terminal is restored
 /// normally. SIGHUP means the terminal is gone: crossterm then spins on a dead tty
 /// instead of returning from `poll`, so the loop would never notice a flag. Save and
-/// exit from here instead.
+/// exit from here instead. That also covers a terminal that closes right after
+/// SIGTERM, and a loop that hasn't wound down a few seconds after it.
 fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback, remote: NowPlaying) {
     #[cfg(unix)]
     tokio::spawn(async move {
         use tokio::signal::unix::{SignalKind, signal};
+        const GRACE: Duration = Duration::from_secs(5);
         let (Ok(mut term), Ok(mut hup)) = (
             signal(SignalKind::terminate()),
             signal(SignalKind::hangup()),
@@ -197,13 +225,15 @@ fn watch_for_termination(flag: Arc<AtomicBool>, playback: Playback, remote: NowP
             _ = term.recv() => {
                 tracing::info!("received SIGTERM");
                 flag.store(true, Ordering::Relaxed);
+                tokio::select! {
+                    _ = hup.recv() => tracing::info!("terminal closed while exiting"),
+                    _ = tokio::time::sleep(GRACE) => tracing::warn!("still running after SIGTERM"),
+                }
             }
-            _ = hup.recv() => {
-                tracing::info!("terminal closed; saving and exiting");
-                tokio::join!(remote.shutdown(), playback.shutdown());
-                std::process::exit(0);
-            }
+            _ = hup.recv() => tracing::info!("terminal closed; saving and exiting"),
         }
+        tokio::join!(remote.shutdown(), playback.shutdown());
+        std::process::exit(0);
     });
     #[cfg(not(unix))]
     let _ = (flag, playback, remote);

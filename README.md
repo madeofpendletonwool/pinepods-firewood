@@ -7,12 +7,13 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 ## ✨ Features
 
 ### 🖥️ **Terminal User Interface**
-- **Beautiful TUI**: Full-featured terminal interface with intuitive navigation
-- **Podcast Browser**: Browse your subscribed podcasts with two-panel view
-- **Episode Management**: View recent, saved, queued, and downloaded episodes
-- **Audio Player**: Built-in player with play/pause, skip (±15s), speed and volume control
-- **Micro-Player**: Always-visible playback controls at bottom of every screen
-- **Search**: Find episodes and podcasts quickly
+- **Sidebar layout**: every page one key away, with a now-playing bar and the keys for the page you're on always on screen
+- **Pages**: Home, Feed, Podcasts, Queue, Saved, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes
+- **Filter as you type**: `/` narrows any list; Search queries your server as you type
+- **Themes**: the same 25 themes as the PinePods web app, starting with the one you picked there, or your terminal's own colors
+- **Keys you can change**: vim-style and arrow keys by default, `?` lists them, `keymap.toml` rebinds them
+- **Mouse**: click to select, click again to play or open, scroll lists, click the progress bar to seek
+- **Never waits**: everything loads in the background, with a spinner while it does and a short message when something fails
 - **Session Persistence**: Remembers your login between sessions (the API key is kept in the OS keychain)
 
 ### 🎧 **Audio Playback**
@@ -95,72 +96,59 @@ sudo cp target/release/pinepods_firewood /usr/local/bin/
 3. **Multi-Factor**: Complete MFA if enabled
 4. **Timezone**: Select your timezone for episode timestamps
 
-### Navigation
-- **Tab**: Switch between tabs (Home, Podcasts, Episodes, Player, etc.)
-- **1-9, 0**: Quick tab switching (0 is the tenth tab)
-- **Arrow Keys/hjkl**: Navigate lists
-- **Enter**: Select item
-- **Space**: Global play/pause
-- **o**: Play the selected episode on another of your devices
-- **Ctrl+R**: Refresh current page
-- **q**: Quit (Ctrl+C anywhere, including the login screen and while typing)
+### Getting around
+- **1–9, 0** jump to a sidebar entry (in the order shown; change it in Settings). **Tab** / **Shift+Tab** step through them
+- **j/k** or **↑/↓** move, **g/G** first/last, **Ctrl+D/U** page down/up
+- **Enter** plays an episode or opens a podcast. **i** (or **l**) opens an episode's details and show notes. **Esc** goes back
+- **/** filters the list you're on; **Enter** keeps the filter, **Esc** clears it
+- **?** shows every key for the page you're on. **q** quits (**Ctrl+C** works anywhere, even mid-typing)
 
-### Tabs Overview
+### Playing
+- **Space** play/pause, **←/→** skip back/forward (15 s by default; change it in Settings)
+- **[ / ]** slower/faster (0.5× to 3×, pitch stays the same), **+/-** volume
+- **n** opens Now Playing, which adds **=** for normal speed, **t** to toggle trimming silence for the podcast and **x** to stop
 
-#### 🏠 **Home** *(Implemented)*
-- Recent episodes from subscriptions
-- Continue listening recommendations
-- Quick access to saved/downloaded content
+### On any episode
+- **a** add to or remove from the queue, **A** play next
+- **s** save/unsave, **d** have the server download it (or delete its copy), **m** mark played/unplayed
+- **o** play it on another of your devices
 
-#### 🎙️ **Podcasts** *(Implemented)*
-- **Left Panel**: Subscribed podcasts list
-- **Right Panel**: Episodes for selected podcast
-- **Navigation**: Tab/arrows to switch panels
-- **Playback**: Enter to play selected episode
+### Pages
+- **Home**: where you left off, new episodes and your most-played podcasts
+- **Feed**: recent episodes from every subscription. **f** cycles All / Unplayed / In progress / Played
+- **Podcasts**: your subscriptions; **Enter** lists a podcast's episodes
+- **Queue**: **K/J** move an episode up/down, **t/b** to the top/bottom, **x** remove, **S** shuffle, **C** twice to clear
+- **Saved** and **Downloads**: episodes you've saved, and the ones your server has a copy of
+- **Search**: episodes from the podcasts you follow
+- **Devices**: your other players (see [Remote Control](#-remote-control))
+- **Settings**: theme, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
 
-#### 📻 **Episodes** *(Implemented)*
-- Recent episodes from all subscriptions
-- **Filters**: All, In Progress, Completed
-- **Auto-load**: Episodes load automatically
-- **Search**: Real-time episode filtering
+### Themes
+Firewood starts with the theme you picked in the PinePods web app, so a change there
+shows up the next time it opens. Picking a theme in Settings stops that. The **Terminal** theme
+uses your terminal's own colors. Firewood uses 24-bit color where the terminal says it
+supports it and the nearest 256-color match elsewhere; `FIREWOOD_COLOR=truecolor` or
+`FIREWOOD_COLOR=256` overrides the guess.
 
-#### 🎵 **Player** *(Implemented)*
-- Full-screen player interface
-- **Space** play/pause, **←/→** skip, **↑/↓** volume, **s** stop
-- **[ / ]** slower/faster, **=** back to 1×
-- **t** toggles trim silence for the current podcast (saved to PinePods)
-- Progress bar with time display, buffering and skip notices
+### Key bindings
+Settings → Key bindings writes `~/.config/pinepods-firewood/keymap.toml` with every
+binding commented out. Uncomment a line and change its keys, then restart:
 
-#### 📡 **Devices**
-- Your other PinePods players (web, mobile, other Firewoods) and what each is playing
-- **Enter** play here: pauses that device and picks up where it is
-- **s** hand off: sends what's playing here to that device, then pauses here once it has it
-- **p** play/pause, **←/→** skip, **[ / ]** speed on that device
+```toml
+[global]
+quit = ["q", "ctrl+q"]
 
-#### 📝 **Queue** *(Planned)*
-- Manage episode queue
-- Drag-and-drop reordering
-- Bulk operations
+[queue]
+move_up = ["U", "shift+up"]
+```
 
-#### ⭐ **Saved** *(Planned)*
-- Bookmarked episodes
-- Personal favorites
-- Offline access preparation
+Keys look like `"q"`, `"G"`, `"space"`, `"enter"`, `"ctrl+r"`, `"shift+up"` or `"f5"`.
+A mistake in the file shows as a message at startup and leaves the defaults in place.
 
-#### 📥 **Downloads** *(Planned)*
-- Downloaded episode management
-- Offline playback
-- Storage usage monitoring
-
-#### 🔍 **Search** *(Planned)*
-- Global episode/podcast search
-- Advanced filters
-- Podcast discovery
-
-#### ⚙️ **Settings** *(Planned)*
-- Audio output configuration
-- Theme customization
-- Keyboard shortcuts
+### Mouse
+Clicking selects, clicking the selected row again plays or opens it, and the wheel
+scrolls. With the mouse on, selecting text in most terminals needs Shift (Option in
+some macOS terminals) held down; `FIREWOOD_NO_MOUSE=1` turns it off.
 
 ## 🔧 Development
 
@@ -170,9 +158,15 @@ src/
 ├── api/           # Typed PinePods API client
 ├── audio/         # Audio output thread
 ├── auth/          # Login flow and saved session
+├── nowplaying/    # Remote control over the server's now-playing socket
 ├── playback/      # Playback core and progress sync
+├── theme/         # The web app's themes, adapted for a terminal
 └── tui/           # Terminal user interface
-    └── pages/     # Individual TUI screens
+    ├── app.rs     # Sidebar, now-playing bar, overlays, input routing
+    ├── keymap.rs  # Default bindings and keymap.toml
+    ├── task.rs    # Background loading
+    ├── ui/        # Shared widgets: lists, episode rows, show notes
+    └── pages/     # The screens
 ```
 
 ### Key Technologies
@@ -210,10 +204,9 @@ devices can see what it's playing and control it, and it can control them. Nothi
 listens on your network; the server relays everything. The web and mobile apps can
 beam episodes to Firewood like to any other device, and it accepts their commands.
 
-- Other devices see it as `Firewood · <hostname>`. Set `"remote": {"device_name": "Kitchen Pi"}`
-  in `~/.config/pinepods-firewood/settings.json` to change that.
+- Other devices see it as `Firewood · <hostname>`. Change that in Settings.
 - `FIREWOOD_REMOTE_DISABLED=1` turns the socket off.
-- If the Devices tab says the server has no now-playing socket, the server is older
+- If the Devices page says the server has no now-playing socket, the server is older
   than the now-playing release, or a reverse proxy in front of it doesn't pass
   WebSocket upgrades on `/ws/api/` through.
 
@@ -236,7 +229,7 @@ sudo dnf install alsa-lib-devel   # Fedora
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the GNU General Public License v3.0; see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgments
 
@@ -246,26 +239,13 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🗺️ Roadmap
 
-### Near Term (v0.2.0)
-- [ ] Complete Queue management
-- [ ] Saved episodes functionality  
-- [ ] Download management
-- [ ] Search implementation
-- [ ] Settings page with audio config
-
-### Medium Term (v0.3.0)
-- [ ] Offline playback support
-- [ ] Playlist management
-- [ ] Keyboard shortcut customization
-- [ ] Theme system
-- [ ] Performance optimizations
-
-### Long Term (v1.0.0)
-- [ ] Web UI integration (PinePods side)
-- [ ] Multi-room synchronization
-- [ ] Plugin system
-- [ ] Advanced discovery options
-- [ ] Mobile companion app
+- [ ] History, playlists and collections
+- [ ] Chapters and transcripts
+- [ ] Podcast discovery and subscribing
+- [ ] A command palette
+- [ ] Cover art in terminals that can show images
+- [ ] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
+- [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on
 
 ---
 
