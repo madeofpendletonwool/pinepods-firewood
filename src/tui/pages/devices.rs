@@ -1,348 +1,288 @@
+//! The user's other players, with handoff and transport controls for each.
+
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    crossterm::event::MouseEvent,
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    text::{Line, Span, Text},
+    widgets::{Cell, Paragraph, Wrap},
 };
 
+use super::{Ctx, Outcome, Page};
 use crate::audio::speed;
-use crate::nowplaying::protocol::{Action, Device};
-use crate::nowplaying::{Connection, NowPlaying, RemoteState};
-use crate::theme::ThemeManager;
+use crate::nowplaying::protocol::{Action as Remote, Device};
+use crate::nowplaying::{Connection, DISABLE_ENV};
+use crate::theme::Theme;
+use crate::tui::keymap::{Action, Context};
+use crate::tui::ui::list::{Click, ListView};
+use crate::tui::ui::{self, clock};
 
 const SPEED_STEP: f32 = 0.25;
 const SKIP_FORWARD: Duration = Duration::from_secs(30);
 const SKIP_BACK: Duration = Duration::from_secs(15);
 
-/// The user's other players, with handoff and transport controls for each.
 pub struct DevicesPage {
-    remote: NowPlaying,
-    theme_manager: ThemeManager,
-    list_state: ListState,
+    list: ListView,
     /// Follows the device rather than the row, since the list reorders as devices
     /// come and go.
     selected_id: Option<String>,
+    devices: Vec<Device>,
+}
+
+impl Default for DevicesPage {
+    fn default() -> Self {
+        Self {
+            list: ListView::default().with_row_height(3),
+            selected_id: None,
+            devices: Vec::new(),
+        }
+    }
 }
 
 impl DevicesPage {
-    pub fn new(remote: NowPlaying) -> Self {
-        Self {
-            remote,
-            theme_manager: ThemeManager::new(),
-            list_state: ListState::default(),
-            selected_id: None,
-        }
+    fn selected(&self) -> Option<&Device> {
+        self.list.selected_index().and_then(|i| self.devices.get(i))
+    }
+}
+
+impl Page for DevicesPage {
+    fn title(&self) -> String {
+        "Devices".into()
     }
 
-    pub fn update_theme(&mut self, theme_name: &str) {
-        self.theme_manager.set_theme(theme_name);
+    fn contexts(&self) -> &'static [Context] {
+        &[Context::Devices, Context::List]
     }
 
-    fn selected(&self, state: &RemoteState) -> Option<Device> {
-        let id = self.selected_id.as_deref()?;
-        state.devices.iter().find(|d| d.device_id == id).cloned()
+    fn hints(&self) -> &'static [Action] {
+        &[
+            Action::PlayHere,
+            Action::SendHere,
+            Action::RemoteToggle,
+            Action::RemoteForward,
+            Action::RemoteFaster,
+        ]
     }
 
-    fn move_selection(&mut self, state: &RemoteState, step: isize) {
-        if state.devices.is_empty() {
-            return;
-        }
-        let current = self
+    fn tick(&mut self, cx: &Ctx) {
+        self.devices = cx.remote.state().devices;
+        self.list.sync(&self.devices, |d| d.label().to_string());
+        let position = self
             .selected_id
             .as_deref()
-            .and_then(|id| state.devices.iter().position(|d| d.device_id == id))
-            .unwrap_or(0) as isize;
-        let next = (current + step).clamp(0, state.devices.len() as isize - 1) as usize;
-        self.selected_id = Some(state.devices[next].device_id.clone());
+            .and_then(|id| self.devices.iter().position(|d| d.device_id == id));
+        if let Some(position) = position {
+            self.list.select_index(position);
+        }
+        self.selected_id = self.selected().map(|d| d.device_id.clone());
     }
 
-    pub async fn handle_input(&mut self, key: KeyEvent) -> Result<()> {
-        let state = self.remote.state();
-        let step = match key.code {
-            KeyCode::Down | KeyCode::Char('j') => Some(1),
-            KeyCode::Up | KeyCode::Char('k') => Some(-1),
-            _ => None,
-        };
-        if let Some(step) = step {
-            self.move_selection(&state, step);
-            return Ok(());
+    fn action(&mut self, action: Action, cx: &mut Ctx) -> Outcome {
+        if self.list.navigate(action) {
+            self.selected_id = self.selected().map(|d| d.device_id.clone());
+            return Outcome::Handled;
         }
-        let Some(device) = self.selected(&state) else {
-            return Ok(());
+        let Some(device) = self.selected().cloned() else {
+            return Outcome::Ignored;
         };
         let target = device.device_id.as_str();
-        match key.code {
-            KeyCode::Enter => self.remote.play_here(&device),
-            KeyCode::Char('s') => self.remote.send_playback_to(target),
-            KeyCode::Char('p') if device.episode().is_some() => {
-                let action = if device.playing {
-                    Action::Pause
+        let has_episode = device.episode().is_some();
+        match action {
+            Action::PlayHere if has_episode => cx.remote.play_here(&device),
+            Action::PlayHere => cx
+                .bus
+                .info(format!("{} isn't playing anything", device.label())),
+            Action::SendHere => {
+                if cx.player.current_episode.is_none() {
+                    cx.bus.info("Nothing is playing here to send");
                 } else {
-                    Action::Play
+                    cx.remote.send_playback_to(target);
+                }
+            }
+            Action::RemoteToggle if has_episode => {
+                let command = if device.playing {
+                    Remote::Pause
+                } else {
+                    Remote::Play
                 };
-                self.remote.command(target, action);
+                cx.remote.command(target, command);
             }
-            KeyCode::Left | KeyCode::Char('h') if device.episode().is_some() => {
-                self.remote.command(target, Action::SkipBack(SKIP_BACK));
+            Action::RemoteBack if has_episode => {
+                cx.remote.command(target, Remote::SkipBack(SKIP_BACK));
             }
-            KeyCode::Right | KeyCode::Char('l') if device.episode().is_some() => {
-                self.remote
-                    .command(target, Action::SkipForward(SKIP_FORWARD));
+            Action::RemoteForward if has_episode => {
+                cx.remote.command(target, Remote::SkipForward(SKIP_FORWARD));
             }
-            KeyCode::Char(c @ ('[' | ']')) if device.episode().is_some() => {
+            Action::RemoteSlower | Action::RemoteFaster if has_episode => {
                 let current = if device.speed > 0.0 {
                     device.speed as f32
                 } else {
                     1.0
                 };
-                let step = if c == ']' { SPEED_STEP } else { -SPEED_STEP };
-                let speed = speed::clamp(current + step);
-                self.remote.command(target, Action::SetSpeed(speed));
+                let step = if action == Action::RemoteFaster {
+                    SPEED_STEP
+                } else {
+                    -SPEED_STEP
+                };
+                cx.remote
+                    .command(target, Remote::SetSpeed(speed::clamp(current + step)));
             }
-            _ => {}
+            Action::RemoteToggle
+            | Action::RemoteBack
+            | Action::RemoteForward
+            | Action::RemoteSlower
+            | Action::RemoteFaster => {
+                cx.bus
+                    .info(format!("{} isn't playing anything", device.label()));
+            }
+            _ => return Outcome::Ignored,
         }
-        Ok(())
+        Outcome::Handled
     }
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect) {
-        let state = self.remote.state();
-        // Keep a selection whenever there's something to select.
-        if self.selected(&state).is_none() {
-            self.selected_id = state.devices.first().map(|d| d.device_id.clone());
+    fn mouse(&mut self, event: MouseEvent, cx: &mut Ctx) -> Outcome {
+        match self.list.mouse(event) {
+            Click::Activated => self.action(Action::PlayHere, cx),
+            Click::Moved => {
+                self.selected_id = self.selected().map(|d| d.device_id.clone());
+                Outcome::Handled
+            }
+            Click::Missed => Outcome::Ignored,
         }
-        let index = self
-            .selected_id
-            .as_deref()
-            .and_then(|id| state.devices.iter().position(|d| d.device_id == id));
-        self.list_state.select(index);
-
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                // Two lines, so a reason for being offline fits.
-                Constraint::Length(4),
-                Constraint::Min(5),
-                Constraint::Length(3),
-            ])
-            .split(area);
-        self.render_status(frame, chunks[0], &state);
-        self.render_devices(frame, chunks[1], &state);
-        self.render_footer(frame, chunks[2]);
     }
 
-    fn render_status(&self, frame: &mut Frame, area: Rect, state: &RemoteState) {
-        let colors = self.theme_manager.get_colors();
+    fn render(&mut self, frame: &mut Frame, area: Rect, cx: &Ctx) {
+        let theme = cx.theme;
+        let state = cx.remote.state();
+        let [status, _, body] = Layout::vertical([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+
         let (dot, color, text) = match &state.connection {
             Connection::Connected => (
                 "●",
-                colors.success,
+                theme.success,
                 format!("Connected as {}", state.device_name),
             ),
-            Connection::Connecting => ("○", colors.warning, "Connecting…".to_string()),
+            Connection::Connecting => {
+                ("○", theme.warning, format!("{} Connecting…", ui::spinner()))
+            }
             Connection::Offline { reason } => (
                 "○",
-                colors.error,
+                theme.error,
                 format!("Not connected: {reason}. Retrying…"),
             ),
             Connection::Disabled => (
                 "○",
-                colors.text_secondary,
-                format!(
-                    "Remote control is off ({} is set)",
-                    crate::nowplaying::DISABLE_ENV
-                ),
+                theme.muted,
+                format!("Remote control is off ({DISABLE_ENV} is set)"),
             ),
         };
-        let status = Paragraph::new(Line::from(vec![
-            Span::styled(format!("{dot} "), Style::default().fg(color)),
-            Span::styled(text, Style::default().fg(colors.text)),
-        ]))
-        .wrap(Wrap { trim: true })
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(colors.border))
-                .title("📡 Devices")
-                .title_style(Style::default().fg(colors.accent)),
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(format!("{dot} "), Style::new().fg(color)),
+                Span::styled(text, theme.base()),
+            ]))
+            .wrap(Wrap { trim: true }),
+            status,
         );
-        frame.render_widget(status, area);
-    }
 
-    fn render_devices(&mut self, frame: &mut Frame, area: Rect, state: &RemoteState) {
-        let colors = self.theme_manager.get_colors();
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(Style::default().fg(colors.border))
-            .title(format!("Your other devices ({})", state.devices.len()))
-            .title_style(Style::default().fg(colors.text));
-
-        if state.devices.is_empty() {
+        if self.devices.is_empty() {
             let text = match state.connection {
                 Connection::Connected => {
                     "No other devices are connected. Open PinePods in a browser or the mobile \
-                     app and it will show up here."
+                     app and it shows up here."
                 }
                 _ => "Devices appear here once Firewood is connected to the server.",
             };
-            let empty = Paragraph::new(text)
-                .style(
-                    Style::default()
-                        .fg(colors.text_secondary)
-                        .add_modifier(Modifier::ITALIC),
-                )
-                .alignment(Alignment::Center)
-                .wrap(Wrap { trim: true })
-                .block(block);
-            frame.render_widget(empty, area);
+            ui::message(
+                frame,
+                body,
+                vec![Line::styled(text, theme.muted())],
+                theme.base(),
+            );
             return;
         }
 
         let now = Instant::now();
-        let items: Vec<ListItem> = state
-            .devices
-            .iter()
-            .map(|device| {
-                let (badge, badge_color) = match (device.episode(), device.playing) {
-                    (None, _) => ("Idle", colors.text_secondary),
-                    (Some(_), true) => ("▶ Playing", colors.success),
-                    (Some(_), false) => ("⏸ Paused", colors.warning),
-                };
-                let header = Line::from(vec![
-                    Span::raw(format!("{} ", type_icon(&device.device_type))),
-                    Span::styled(
-                        device.label().to_string(),
-                        Style::default()
-                            .fg(colors.text)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  {}  ", device.device_type),
-                        Style::default().fg(colors.text_secondary),
-                    ),
-                    Span::styled(badge, Style::default().fg(badge_color)),
-                ]);
-                let detail = match device.episode() {
-                    None => Line::from(Span::styled(
-                        "     Nothing playing",
-                        Style::default().fg(colors.text_secondary),
-                    )),
-                    Some(_) => {
-                        let mut spans = vec![
-                            Span::styled(
-                                format!("     {}  ", crate::tui::text::truncate(&device.title, 60)),
-                                Style::default().fg(colors.primary),
-                            ),
-                            Span::styled(
-                                progress(state.live_position(device, now), device.duration_sec),
-                                Style::default().fg(colors.text_secondary),
-                            ),
-                        ];
-                        if device.speed > 0.0 && (device.speed - 1.0).abs() > 0.01 {
-                            spans.push(Span::styled(
-                                format!("  {}×", device.speed),
-                                Style::default().fg(colors.accent),
-                            ));
-                        }
-                        Line::from(spans)
-                    }
-                };
-                ListItem::new(vec![header, detail])
-            })
-            .collect();
-
-        let list = List::new(items)
-            .block(block)
-            .highlight_style(
-                Style::default()
-                    .bg(colors.highlight)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("► ");
-        frame.render_stateful_widget(list, area, &mut self.list_state);
+        let devices = &self.devices;
+        let width = body.width.saturating_sub(4);
+        self.list.render(
+            frame,
+            body,
+            theme,
+            &[Constraint::Length(2), Constraint::Fill(1)],
+            None,
+            |i, _| {
+                let device = &devices[i];
+                let position = state.live_position(device, now);
+                vec![
+                    Cell::from(Span::styled(type_icon(&device.device_type), theme.accent())),
+                    Cell::from(Text::from(card(device, position, width, theme))),
+                ]
+            },
+        );
     }
+}
 
-    fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let colors = self.theme_manager.get_colors();
-        let controls = [
-            ("Enter", "Play here"),
-            ("s", "Hand off to it"),
-            ("p", "Play/Pause"),
-            ("←→", "Skip"),
-            ("[ ]", "Speed"),
-        ];
-        let mut spans = Vec::new();
-        for (i, (key, desc)) in controls.iter().enumerate() {
-            if i > 0 {
-                spans.push(Span::raw("  "));
-            }
-            spans.push(Span::styled(
-                *key,
-                Style::default()
-                    .fg(colors.primary)
-                    .add_modifier(Modifier::BOLD),
-            ));
-            spans.push(Span::styled(
-                format!(" {desc}"),
-                Style::default().fg(colors.text_secondary),
-            ));
-        }
-        let footer = Paragraph::new(Line::from(spans))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(colors.border))
-                    .title("🔧 Controls")
-                    .title_style(Style::default().fg(colors.accent)),
-            );
-        frame.render_widget(footer, area);
+/// Name and state, then what's playing, then where it is.
+fn card<'a>(device: &Device, position: Duration, width: u16, theme: &Theme) -> Vec<Line<'a>> {
+    let (badge, badge_color) = match (device.episode(), device.playing) {
+        (None, _) => ("idle", theme.muted),
+        (Some(_), true) => ("▶ playing", theme.success),
+        (Some(_), false) => ("⏸ paused", theme.warning),
+    };
+    let header = Line::from(vec![
+        Span::styled(
+            device.label().to_string(),
+            Style::new().add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(format!("  {}  ", device.device_type), theme.faint()),
+        Span::styled(badge, Style::new().fg(badge_color)),
+    ]);
+    if device.episode().is_none() {
+        return vec![header, Line::styled("Nothing playing", theme.muted())];
     }
+    let mut time = if device.duration_sec > 0.0 {
+        format!(
+            " {} / {}",
+            clock(position),
+            clock(Duration::from_secs_f64(device.duration_sec))
+        )
+    } else {
+        format!(" {}", clock(position))
+    };
+    if device.speed > 0.0 && (device.speed - 1.0).abs() > 0.01 {
+        time.push_str(&format!("  {}×", device.speed));
+    }
+    let bar_width = width
+        .saturating_sub(time.chars().count() as u16 + 1)
+        .min(40);
+    let ratio = if device.duration_sec > 0.0 {
+        (position.as_secs_f64() / device.duration_sec).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let mut progress = ui::bar(ratio, bar_width, theme);
+    progress.push(Span::styled(time, theme.muted()));
+    vec![
+        header,
+        Line::styled(device.title.clone(), theme.accent()),
+        Line::from(progress),
+    ]
 }
 
 fn type_icon(device_type: &str) -> &'static str {
     match device_type.to_ascii_lowercase().as_str() {
-        "firewood" => "🌲",
-        "ios" | "android" | "mobile" => "📱",
-        "web" => "🌐",
-        _ => "💻",
-    }
-}
-
-fn progress(position: Duration, duration_sec: f64) -> String {
-    let clock = |secs: u64| {
-        let (h, m, s) = (secs / 3600, secs / 60 % 60, secs % 60);
-        if h > 0 {
-            format!("{h}:{m:02}:{s:02}")
-        } else {
-            format!("{m}:{s:02}")
-        }
-    };
-    if duration_sec > 0.0 {
-        format!(
-            "{} / {}",
-            clock(position.as_secs()),
-            clock(duration_sec as u64)
-        )
-    } else {
-        clock(position.as_secs())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn progress_reads_like_the_player() {
-        assert_eq!(progress(Duration::from_secs(65), 3725.0), "1:05 / 1:02:05");
-        assert_eq!(progress(Duration::from_secs(5), 0.0), "0:05");
+        "firewood" => "▣",
+        "ios" | "android" | "mobile" => "▯",
+        "web" => "◍",
+        _ => "▭",
     }
 }

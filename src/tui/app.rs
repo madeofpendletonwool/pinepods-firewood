@@ -1,986 +1,249 @@
-use anyhow::Result;
-use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
-use ratatui::{
-    Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Tabs},
-};
+//! The frame around the pages: sidebar, now-playing bar, key hints, toasts and
+//! overlays, and where input goes.
+//!
+//! Nothing here waits on the network. Pages load in the background (see
+//! [`task`](super::task)), so the loop in `main` can draw every frame on time.
+
 use std::time::{Duration, Instant};
 
+use ratatui::{
+    Frame,
+    crossterm::event::{
+        KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    },
+    layout::{Alignment, Constraint, Layout, Position, Rect},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, Paragraph},
+};
+use tokio::sync::mpsc;
+use unicode_width::UnicodeWidthStr;
+
 use super::device_picker::DevicePicker;
-use super::pages::*;
-use crate::api::Api;
+use super::keymap::{Action, Context, Keymap};
+use super::pages::{Ctx, Outcome, Page, Section};
+use super::task::{Bus, Event, Pending, Resource, Toast, ToastKind};
+use super::text::truncate;
+use super::ui::{self, list::Click};
+use crate::api::{Api, ApiResult};
 use crate::auth::SessionInfo;
-use crate::nowplaying::NowPlaying;
-use crate::playback::Playback;
+use crate::nowplaying::{Connection, NowPlaying};
+use crate::playback::{Playback, PlaybackState, PlayerState};
 use crate::settings::SettingsManager;
-use crate::theme::ThemeManager;
+use crate::theme::{ColorDepth, Theme};
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum AppTab {
-    Home = 0,
-    Player = 1,
-    Episodes = 2,
-    Podcasts = 3,
-    Queue = 4,
-    Saved = 5,
-    Downloads = 6,
-    Search = 7,
-    Settings = 8,
-    Devices = 9,
-}
+const SIDEBAR_WIDTH: u16 = 22;
+/// Digits and icons only.
+const SIDEBAR_COMPACT_WIDTH: u16 = 7;
+/// Narrower than this, the sidebar drops its labels.
+const SIDEBAR_FULL_TERMINAL: u16 = 110;
+/// Narrower than this, it folds away entirely.
+const SIDEBAR_MIN_TERMINAL: u16 = 60;
+const VOLUME_STEP: f32 = 0.05;
+const SPEED_STEP: f32 = 0.1;
+/// How long a volume or speed change shows in the now-playing bar.
+const FLASH_FOR: Duration = Duration::from_millis(1500);
+const MAX_TOASTS: usize = 4;
 
-impl AppTab {
-    pub fn title(self) -> &'static str {
-        match self {
-            Self::Home => "Home",
-            Self::Podcasts => "Podcasts",
-            Self::Episodes => "Feed",
-            Self::Player => "Player",
-            Self::Queue => "Queue",
-            Self::Saved => "Saved",
-            Self::Downloads => "Downloads",
-            Self::Search => "Search",
-            Self::Settings => "Settings",
-            Self::Devices => "Devices",
-        }
-    }
-
-    pub fn icon(self) -> &'static str {
-        match self {
-            Self::Home => "🏠",
-            Self::Podcasts => "🎙️",
-            Self::Episodes => "📻",
-            Self::Player => "🎵",
-            Self::Queue => "📝",
-            Self::Saved => "⭐",
-            Self::Downloads => "📥",
-            Self::Search => "🔍",
-            Self::Settings => "⚙️",
-            Self::Devices => "📡",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "Home" => Some(Self::Home),
-            "Player" => Some(Self::Player),
-            "Feed" => Some(Self::Episodes),
-            "Podcasts" => Some(Self::Podcasts),
-            "Queue" => Some(Self::Queue),
-            "Saved" => Some(Self::Saved),
-            "Downloads" => Some(Self::Downloads),
-            "Search" => Some(Self::Search),
-            "Settings" => Some(Self::Settings),
-            "Devices" => Some(Self::Devices),
-            _ => None,
-        }
-    }
-
-    pub fn all_tabs() -> Vec<Self> {
-        vec![
-            Self::Home,
-            Self::Player,
-            Self::Episodes,
-            Self::Podcasts,
-            Self::Queue,
-            Self::Saved,
-            Self::Downloads,
-            Self::Search,
-            Self::Settings,
-            Self::Devices,
-        ]
-    }
-
-    /// Tabs that list episodes, where "Play on ▸" applies.
-    fn lists_episodes(self) -> bool {
-        matches!(
-            self,
-            Self::Home
-                | Self::Episodes
-                | Self::Podcasts
-                | Self::Queue
-                | Self::Saved
-                | Self::Downloads
-                | Self::Search
-        )
-    }
-
-    pub fn ordered_tabs(settings_manager: &crate::settings::SettingsManager) -> Vec<Self> {
-        let tab_order = settings_manager.tab_order();
-        let mut ordered = Vec::new();
-
-        // Add tabs according to user's preferred order
-        for tab_name in tab_order {
-            if let Some(tab) = Self::from_name(tab_name) {
-                ordered.push(tab);
-            }
-        }
-
-        // Add any missing tabs (in case settings are incomplete)
-        for tab in Self::all_tabs() {
-            if !ordered.contains(&tab) {
-                ordered.push(tab);
-            }
-        }
-
-        ordered
-    }
-}
-
-pub struct TuiApp {
-    // Core state
-    client: Api,
-    session_info: SessionInfo,
-    active_tab: AppTab,
-    should_quit: bool,
-
-    // Audio player
-    audio_player: Playback,
+pub struct App {
+    api: Api,
+    playback: Playback,
     remote: NowPlaying,
-    /// The "Play on ▸" device picker, while open.
+    settings: SettingsManager,
+    account: String,
+
+    theme: Theme,
+    depth: ColorDepth,
+    keymap: Keymap,
+    bus: Bus,
+    events: mpsc::UnboundedReceiver<Event>,
+    server_theme: Pending<ApiResult<String>>,
+
+    order: Vec<Section>,
+    /// One stack of pages per section, in [`Section::ALL`] order.
+    stacks: Vec<Vec<Box<dyn Page>>>,
+    current: Section,
+    player: PlayerState,
+
+    toasts: Vec<Toast>,
+    flash: Option<(String, Instant)>,
+    help: Option<u16>,
     picker: Option<DevicePicker>,
     /// The last remote-control notice already shown, so each shows once.
     notice_seen: Option<Instant>,
+    quit: bool,
 
-    // Pages
-    home_page: HomePage,
-    podcasts_page: PodcastsPage,
-    episodes_page: EpisodesPage,
-    player_page: PlayerPage,
-    queue_page: QueuePage,
-    saved_page: SavedPage,
-    downloads_page: DownloadsPage,
-    search_page: SearchPage,
-    settings_page: SettingsPage,
-    devices_page: DevicesPage,
-
-    // UI state
-    loading: bool,
-    error_message: Option<String>,
-    success_message: Option<String>,
-    message_timeout: Option<Instant>,
-
-    // Tab scrolling state
-    tab_scroll_offset: usize,
-
-    // Theme management
-    theme_manager: ThemeManager,
-
-    // Settings management
-    settings_manager: SettingsManager,
-
-    // Animation
-    animation_frame: usize,
-    last_animation_update: Instant,
+    // Where things were drawn, for the mouse.
+    sidebar_rows: Vec<(Rect, Section)>,
+    content: Rect,
+    play_button: Rect,
+    progress: Rect,
+    toast_area: Option<Rect>,
 }
 
-impl TuiApp {
+impl App {
     pub fn new(
-        session_info: SessionInfo,
-        client: Api,
-        audio_player: Playback,
+        session: &SessionInfo,
+        api: Api,
+        playback: Playback,
         remote: NowPlaying,
-        settings_manager: SettingsManager,
+        settings: SettingsManager,
     ) -> Self {
-        let mut theme_manager = ThemeManager::new();
-        theme_manager.set_theme(settings_manager.theme_name());
-        let skip_interval = Duration::from_secs(settings_manager.skip_interval());
+        let auth = &session.auth_state;
+        let user = auth
+            .user_details
+            .Username
+            .clone()
+            .unwrap_or_else(|| "you".into());
+        let server = auth
+            .server_name
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .to_string();
+        let depth = ColorDepth::detect();
+        let (bus, events) = Bus::new();
 
-        let mut episodes_page = EpisodesPage::new(client.clone());
-        episodes_page.set_audio_player(audio_player.clone());
+        let (keymap, problems) = Keymap::load(Keymap::path().as_deref());
+        for problem in problems {
+            tracing::warn!("{problem}");
+            bus.error(problem);
+        }
 
-        let mut podcasts_page = PodcastsPage::new(client.clone());
-        podcasts_page.set_audio_player(audio_player.clone());
+        let server_theme = if settings.get().theme.follow_server {
+            let api = api.clone();
+            Pending::spawn(async move { api.get_theme().await })
+        } else {
+            Pending::default()
+        };
 
-        let mut settings_page = SettingsPage::new();
-        settings_page.set_session_info(session_info.clone());
-
-        let mut home_page = HomePage::new(client.clone());
-        home_page.set_audio_player(audio_player.clone());
-
-        let mut queue_page = QueuePage::new(client.clone());
-        queue_page.set_audio_player(audio_player.clone());
-
-        let mut saved_page = SavedPage::new(client.clone());
-        saved_page.set_audio_player(audio_player.clone());
-
-        let mut downloads_page = DownloadsPage::new(client.clone());
-        downloads_page.set_audio_player(audio_player.clone());
-
-        let mut search_page = SearchPage::new(client.clone());
-        search_page.set_audio_player(audio_player.clone());
-
-        Self {
-            client,
-            session_info,
-            active_tab: AppTab::Home,
-            should_quit: false,
-
-            audio_player: audio_player.clone(),
-            remote: remote.clone(),
+        let order = Section::ordered(&settings.get().ui.tab_order);
+        let current = order[0];
+        let mut app = Self {
+            theme: Theme::named(settings.theme_name(), depth),
+            depth,
+            keymap,
+            bus,
+            events,
+            server_theme,
+            stacks: Section::ALL.iter().map(|s| vec![s.root()]).collect(),
+            order,
+            current,
+            player: playback.get_state(),
+            api,
+            playback,
+            remote,
+            settings,
+            account: format!("{user} on {server}"),
+            toasts: Vec::new(),
+            flash: None,
+            help: None,
             picker: None,
             notice_seen: None,
-
-            home_page,
-            podcasts_page,
-            episodes_page,
-            player_page: PlayerPage::new(audio_player, skip_interval),
-            queue_page,
-            saved_page,
-            downloads_page,
-            search_page,
-            settings_page,
-            devices_page: DevicesPage::new(remote),
-
-            loading: false,
-            error_message: None,
-            success_message: None,
-            message_timeout: None,
-
-            tab_scroll_offset: 0,
-
-            theme_manager,
-            settings_manager,
-
-            animation_frame: 0,
-            last_animation_update: Instant::now(),
-        }
+            quit: false,
+            sidebar_rows: Vec::new(),
+            content: Rect::default(),
+            play_button: Rect::default(),
+            progress: Rect::default(),
+            toast_area: None,
+        };
+        app.with_page(|page, cx| page.show(cx));
+        app
     }
 
     pub fn should_quit(&self) -> bool {
-        self.should_quit
+        self.quit
     }
 
-    pub fn update_theme(&mut self, theme_name: &str) {
-        self.theme_manager.set_theme(theme_name);
+    fn stack(&self, section: Section) -> &Vec<Box<dyn Page>> {
+        let i = Section::ALL.iter().position(|s| *s == section).unwrap_or(0);
+        &self.stacks[i]
     }
 
-    pub async fn handle_input(&mut self, key: ratatui::crossterm::event::KeyEvent) -> Result<()> {
-        if key.kind != KeyEventKind::Press {
-            return Ok(());
-        }
+    fn stack_mut(&mut self, section: Section) -> &mut Vec<Box<dyn Page>> {
+        let i = Section::ALL.iter().position(|s| *s == section).unwrap_or(0);
+        &mut self.stacks[i]
+    }
 
-        // Ctrl+C always quits, even mid-typing.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
-            return Ok(());
-        }
+    fn page(&self) -> &dyn Page {
+        self.stack(self.current)
+            .last()
+            .expect("every section has a root page")
+            .as_ref()
+    }
 
-        if self.picker.is_some() {
-            self.handle_picker_input(key);
-            return Ok(());
-        }
-
-        // While a text field has focus every other key is text, so skip the
-        // single-key shortcuts (q, Space, digits).
-        let typing = match self.active_tab {
-            AppTab::Search => self.search_page.is_editing(),
-            AppTab::Episodes => self.episodes_page.is_editing(),
-            _ => false,
+    /// Runs `f` on the open page with a context borrowed from the rest of the app.
+    fn with_page<R>(&mut self, f: impl FnOnce(&mut dyn Page, &mut Ctx) -> R) -> R {
+        let i = Section::ALL
+            .iter()
+            .position(|s| *s == self.current)
+            .unwrap_or(0);
+        let page = self.stacks[i]
+            .last_mut()
+            .expect("every section has a root page");
+        let mut cx = Ctx {
+            api: &self.api,
+            playback: &self.playback,
+            remote: &self.remote,
+            bus: &self.bus,
+            theme: &self.theme,
+            keymap: &self.keymap,
+            player: &self.player,
+            settings: &mut self.settings,
+            account: &self.account,
         };
+        f(page.as_mut(), &mut cx)
+    }
 
-        match (key.modifiers, key.code) {
-            (KeyModifiers::NONE, KeyCode::Char('q')) if !typing => {
-                self.should_quit = true;
-                return Ok(());
-            }
-            (KeyModifiers::NONE, KeyCode::Char(' '))
-                if !typing && self.active_tab != AppTab::Player =>
-            {
-                if let Err(e) = self.audio_player.toggle_play_pause() {
-                    self.show_error_message(&format!("Failed to control playback: {}", e));
-                }
-                return Ok(());
-            }
-            (KeyModifiers::NONE, KeyCode::Tab) if !typing => {
-                self.switch_tab(self.next_tab(1)).await?;
-                return Ok(());
-            }
-            (_, KeyCode::BackTab) if !typing => {
-                self.switch_tab(self.next_tab(-1)).await?;
-                return Ok(());
-            }
-            (KeyModifiers::CONTROL, KeyCode::Char('r')) => {
-                self.refresh_current_page().await?;
-                return Ok(());
-            }
-            (KeyModifiers::NONE, KeyCode::Char('o'))
-                if !typing && self.active_tab.lists_episodes() =>
-            {
-                self.open_picker();
-                return Ok(());
-            }
-            (KeyModifiers::NONE, KeyCode::Char(c @ '0'..='9')) if !typing => {
-                // Numbers follow the tab order as displayed, which the user can change;
-                // 0 is the tenth.
-                let index = (c as usize + 10 - '1' as usize) % 10;
-                if let Some(&tab) = AppTab::ordered_tabs(&self.settings_manager).get(index) {
-                    self.switch_tab(tab).await?;
-                }
-                return Ok(());
-            }
-            _ => {}
+    /// Once per frame: take in what the background work produced.
+    pub fn tick(&mut self) {
+        let previous = self.player.current_episode.as_ref().map(|e| e.key());
+        self.player = self.playback.get_state();
+        let current = self.player.current_episode.as_ref().map(|e| e.key());
+        if current != previous && previous.is_some() {
+            // The last episode's position was saved; lists showing it are out of date.
+            self.bus.changed(Resource::Progress);
         }
 
-        // Forward input to active page
-        match self.active_tab {
-            AppTab::Home => self.home_page.handle_input(key).await?,
-            AppTab::Podcasts => self.podcasts_page.handle_input(key).await?,
-            AppTab::Episodes => self.episodes_page.handle_input(key).await?,
-            AppTab::Player => {
-                self.player_page.handle_input(key).await?;
-            }
-            AppTab::Queue => self.queue_page.handle_input(key).await?,
-            AppTab::Saved => self.saved_page.handle_input(key).await?,
-            AppTab::Downloads => self.downloads_page.handle_input(key).await?,
-            AppTab::Search => self.search_page.handle_input(key).await?,
-            AppTab::Devices => self.devices_page.handle_input(key).await?,
-            AppTab::Settings => {
-                self.settings_page.handle_input(key).await?;
-                // Check if theme changed and sync it
-                let current_theme = self
-                    .settings_page
-                    .settings_manager()
-                    .theme_name()
-                    .to_string();
-                if current_theme != self.theme_manager.get_theme_name() {
-                    self.update_theme(&current_theme);
-                    // Also update all other pages
-                    self.home_page.update_theme(&current_theme);
-                    self.podcasts_page.update_theme(&current_theme);
-                    self.episodes_page.update_theme(&current_theme);
-                    self.player_page.update_theme(&current_theme);
-                    self.queue_page.update_theme(&current_theme);
-                    self.saved_page.update_theme(&current_theme);
-                    self.downloads_page.update_theme(&current_theme);
-                    self.search_page.update_theme(&current_theme);
-                    self.devices_page.update_theme(&current_theme);
-                }
-                // Check if tab order changed and sync it
-                let current_tab_order = self.settings_page.settings_manager().tab_order().clone();
-                if current_tab_order != self.settings_manager.tab_order().clone() {
-                    // Reload settings to get updated tab order
-                    if let Ok(updated_settings) = crate::settings::SettingsManager::new() {
-                        self.settings_manager = updated_settings;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Event::Toast(toast) => self.push_toast(toast),
+                Event::Changed(resource) => {
+                    for page in self.stacks.iter_mut().flatten() {
+                        page.changed(resource);
                     }
                 }
             }
         }
-
-        Ok(())
-    }
-
-    pub async fn update(&mut self) -> Result<()> {
-        // Update animation
-        if self.last_animation_update.elapsed() >= Duration::from_millis(100) {
-            self.animation_frame = (self.animation_frame + 1) % 8;
-            self.last_animation_update = Instant::now();
-        }
-
-        // Clear expired messages
-        if let Some(timeout) = self.message_timeout
-            && timeout.elapsed() >= Duration::from_secs(3)
+        let now = Instant::now();
+        self.toasts
+            .retain(|t| now.duration_since(t.at) < toast_life(t.kind));
+        if self
+            .flash
+            .as_ref()
+            .is_some_and(|(_, at)| at.elapsed() > FLASH_FOR)
         {
-            self.error_message = None;
-            self.success_message = None;
-            self.message_timeout = None;
+            self.flash = None;
         }
 
         self.show_remote_notice();
+        self.apply_server_theme();
+        self.apply_settings();
 
-        // Update active page
-        match self.active_tab {
-            AppTab::Home => self.home_page.update().await?,
-            AppTab::Podcasts => self.podcasts_page.update().await?,
-            AppTab::Episodes => self.episodes_page.update().await?,
-            AppTab::Player => self.player_page.update()?,
-            AppTab::Queue => self.queue_page.update().await?,
-            AppTab::Saved => self.saved_page.update().await?,
-            AppTab::Downloads => self.downloads_page.update().await?,
-            AppTab::Search => self.search_page.update().await?,
-            AppTab::Settings => self.settings_page.update().await?,
-            AppTab::Devices => {}
-        }
-
-        Ok(())
+        self.with_page(|page, cx| {
+            page.tick(cx);
+            page.show(cx);
+        });
     }
 
-    /// The tab `step` places away in the displayed order, wrapping around.
-    fn next_tab(&self, step: isize) -> AppTab {
-        let tabs = AppTab::ordered_tabs(&self.settings_manager);
-        let len = tabs.len() as isize;
-        let current = tabs.iter().position(|t| *t == self.active_tab).unwrap_or(0) as isize;
-        tabs[(current + step).rem_euclid(len) as usize]
-    }
-
-    async fn switch_tab(&mut self, tab: AppTab) -> Result<()> {
-        self.active_tab = tab;
-        self.clear_messages();
-        self.handle_tab_switch().await
-    }
-
-    async fn handle_tab_switch(&mut self) -> Result<()> {
-        // Auto-load data when switching to specific tabs
-        match self.active_tab {
-            AppTab::Episodes => {
-                if let Err(e) = self.episodes_page.refresh().await {
-                    self.show_error_message(&format!("Failed to load episodes: {}", e));
-                }
-            }
-            AppTab::Podcasts => {
-                if let Err(e) = self.podcasts_page.refresh().await {
-                    self.show_error_message(&format!("Failed to load podcasts: {}", e));
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    pub fn render(&mut self, frame: &mut Frame) {
-        let main_layout = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Header with tabs
-                Constraint::Min(5),    // Content (minimum height to prevent overlap)
-                Constraint::Length(3), // Micro-player
-                Constraint::Length(3), // Footer with shortcuts
-            ])
-            .split(frame.area());
-
-        // Render header with tabs
-        self.render_header(frame, main_layout[0]);
-
-        // Render active page content
-        match self.active_tab {
-            AppTab::Home => self.home_page.render(frame, main_layout[1]),
-            AppTab::Podcasts => self.podcasts_page.render(frame, main_layout[1]),
-            AppTab::Episodes => self.episodes_page.render(frame, main_layout[1]),
-            AppTab::Player => self.player_page.render(frame, main_layout[1]),
-            AppTab::Queue => self.queue_page.render(frame, main_layout[1]),
-            AppTab::Saved => self.saved_page.render(frame, main_layout[1]),
-            AppTab::Downloads => self.downloads_page.render(frame, main_layout[1]),
-            AppTab::Search => self.search_page.render(frame, main_layout[1]),
-            AppTab::Settings => self.settings_page.render(frame, main_layout[1]),
-            AppTab::Devices => self.devices_page.render(frame, main_layout[1]),
-        }
-
-        // Render micro-player
-        self.render_micro_player(frame, main_layout[2]);
-
-        // Render footer
-        self.render_footer(frame, main_layout[3]);
-
-        if let Some(picker) = &mut self.picker {
-            picker.render(
-                frame,
-                frame.area(),
-                self.theme_manager.get_colors(),
-                &self.remote,
-            );
-        }
-
-        // Render messages overlay if needed
-        self.render_messages_overlay(frame, frame.area());
-    }
-
-    fn render_header(&mut self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
-        let all_tabs = AppTab::ordered_tabs(&self.settings_manager);
-
-        // Calculate how many tabs can fit based on terminal width
-        let available_width = area.width.saturating_sub(2) as usize; // Account for borders only
-
-        // Calculate approximate width per tab (icon + space + title + shortcut + padding)
-        let avg_tab_width = 14; // More accurate estimate: icon(2) + space(1) + title(6-8) + shortcut(2) + padding(2)
-        let max_visible_tabs = (available_width / avg_tab_width).max(1).min(all_tabs.len());
-
-        // Simple scrolling: show a window of tabs based on scroll offset
-        let visible_count = max_visible_tabs;
-        let active_index = all_tabs
-            .iter()
-            .position(|t| *t == self.active_tab)
-            .unwrap_or(0);
-
-        // Adjust scroll offset to ensure active tab is visible
-        let mut scroll_offset = self.tab_scroll_offset;
-        let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
-        let end_idx = (start_idx + visible_count).min(all_tabs.len());
-
-        // If active tab is outside the visible window, adjust scroll offset
-        if active_index < start_idx {
-            scroll_offset = active_index;
-        } else if active_index >= end_idx {
-            scroll_offset = active_index.saturating_sub(visible_count - 1);
-        }
-
-        // Ensure scroll offset doesn't go beyond valid range
-        let max_scroll = all_tabs.len().saturating_sub(visible_count);
-        if scroll_offset > max_scroll {
-            scroll_offset = max_scroll;
-        }
-
-        // Update the stored scroll offset and recalculate
-        self.tab_scroll_offset = scroll_offset;
-        let start_idx = scroll_offset.min(all_tabs.len().saturating_sub(visible_count));
-        let end_idx = (start_idx + visible_count).min(all_tabs.len());
-
-        let visible_tabs = &all_tabs[start_idx..end_idx];
-        let show_left_arrow = start_idx > 0;
-        let show_right_arrow = end_idx < all_tabs.len();
-
-        let titles: Vec<Line> = visible_tabs
-            .iter()
-            .enumerate()
-            .map(|(visible_idx, tab)| {
-                let actual_idx = start_idx + visible_idx;
-                let icon = tab.icon();
-                let title = tab.title();
-                // Digit keys reach the first ten tabs, with 0 for the tenth.
-                let shortcut = match actual_idx {
-                    0..=8 => format!(" {}", actual_idx + 1),
-                    9 => " 0".to_string(),
-                    _ => String::new(),
-                };
-
-                Line::from(vec![
-                    Span::styled(icon, Style::default().fg(theme_colors.accent)),
-                    Span::raw(" "),
-                    Span::styled(title, Style::default().fg(theme_colors.text)),
-                    Span::styled(shortcut, Style::default().fg(theme_colors.text_secondary)),
-                ])
-            })
-            .collect();
-
-        // Create tabs widget with arrow indicators in title
-        let tab_title = if show_left_arrow && show_right_arrow {
-            format!(
-                "◀ 🌲 Pinepods Firewood - {} ▶",
-                self.session_info
-                    .auth_state
-                    .user_details
-                    .Username
-                    .as_deref()
-                    .unwrap_or("User")
-            )
-        } else if show_left_arrow {
-            format!(
-                "◀ 🌲 Pinepods Firewood - {} ",
-                self.session_info
-                    .auth_state
-                    .user_details
-                    .Username
-                    .as_deref()
-                    .unwrap_or("User")
-            )
-        } else if show_right_arrow {
-            format!(
-                " 🌲 Pinepods Firewood - {} ▶",
-                self.session_info
-                    .auth_state
-                    .user_details
-                    .Username
-                    .as_deref()
-                    .unwrap_or("User")
-            )
-        } else {
-            format!(
-                " 🌲 Pinepods Firewood - {} ",
-                self.session_info
-                    .auth_state
-                    .user_details
-                    .Username
-                    .as_deref()
-                    .unwrap_or("User")
-            )
-        };
-
-        // Find which visible tab is the active one
-        let active_idx = active_index;
-        let selected_index = if active_idx >= start_idx && active_idx < end_idx {
-            active_idx - start_idx
-        } else {
-            0
-        };
-
-        let tabs_widget = Tabs::new(titles)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .style(Style::default().fg(theme_colors.accent))
-                    .border_style(Style::default().fg(theme_colors.accent))
-                    .title(tab_title)
-                    .title_style(Style::default().fg(theme_colors.text)),
-            )
-            .select(selected_index)
-            .style(Style::default().fg(theme_colors.text_secondary))
-            .highlight_style(
-                Style::default()
-                    .fg(theme_colors.primary)
-                    .bg(theme_colors.container)
-                    .add_modifier(Modifier::BOLD),
-            );
-
-        frame.render_widget(tabs_widget, area);
-    }
-
-    fn render_micro_player(&self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
-        let player_state = self.audio_player.get_state();
-
-        if let Some(ref episode) = player_state.current_episode {
-            let layout = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(40), // Episode info
-                    Constraint::Percentage(30), // Progress bar
-                    Constraint::Percentage(30), // Controls and time
-                ])
-                .split(area);
-
-            // Episode info
-            let podcast_name = episode.podcast_name.as_deref().unwrap_or("Unknown");
-            let episode_title = &episode.episode_title;
-            let title_text = super::text::truncate(episode_title, 30);
-
-            let episode_info = ratatui::widgets::Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled("🎵 ", Style::default().fg(theme_colors.accent)),
-                    Span::styled(
-                        title_text.clone(),
-                        Style::default()
-                            .fg(theme_colors.text)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    // Show loading indicator in title area if loading
-                    if let Some(note) = match player_state.playback_state {
-                        crate::playback::PlaybackState::Loading
-                            if player_state.reconnecting.is_some() =>
-                        {
-                            Some(" (Reconnecting...)")
-                        }
-                        crate::playback::PlaybackState::Loading => Some(" (Loading...)"),
-                        crate::playback::PlaybackState::Playing if player_state.buffering => {
-                            Some(" (Buffering...)")
-                        }
-                        _ => None,
-                    } {
-                        Span::styled(
-                            note,
-                            Style::default()
-                                .fg(theme_colors.warning)
-                                .add_modifier(Modifier::ITALIC),
-                        )
-                    } else {
-                        Span::raw("")
-                    },
-                ]),
-                Line::from(vec![
-                    Span::styled("by ", Style::default().fg(theme_colors.text_secondary)),
-                    Span::styled(podcast_name, Style::default().fg(theme_colors.primary)),
-                ]),
-            ])
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.border)),
-            );
-            frame.render_widget(episode_info, layout[0]);
-
-            // Progress bar
-            let progress = if player_state.total_duration.as_secs() > 0 {
-                player_state.current_position.as_secs_f64()
-                    / player_state.total_duration.as_secs_f64()
-            } else {
-                0.0
-            };
-
-            let progress_bar = ratatui::widgets::Gauge::default()
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme_colors.border)),
-                )
-                .gauge_style(
-                    Style::default()
-                        .fg(theme_colors.primary)
-                        .bg(theme_colors.container),
-                )
-                .ratio(progress);
-            frame.render_widget(progress_bar, layout[1]);
-
-            // Controls and time
-            let current_time = Self::format_duration_short(player_state.current_position);
-            let total_time = Self::format_duration_short(player_state.total_duration);
-            let status_icon = match player_state.playback_state {
-                crate::playback::PlaybackState::Playing => "▶️",
-                crate::playback::PlaybackState::Paused => "⏸️",
-                crate::playback::PlaybackState::Loading => {
-                    // Animated loading spinner
-                    let spinners = ["🔄", "🔃", "⟳", "⟲"];
-                    spinners[self.animation_frame % spinners.len()]
-                }
-                crate::playback::PlaybackState::Stopped => "⏹️",
-                crate::playback::PlaybackState::Error(_) => "❌",
-            };
-
-            let controls = ratatui::widgets::Paragraph::new(vec![
-                Line::from(vec![
-                    Span::styled(status_icon, Style::default().fg(theme_colors.warning)),
-                    Span::raw(" "),
-                    Span::styled(
-                        format!("{}/{}", current_time, total_time),
-                        Style::default().fg(theme_colors.text),
-                    ),
-                    if player_state.speed == 1.0 {
-                        Span::raw("")
-                    } else {
-                        Span::styled(
-                            format!(" {}×", player_state.speed),
-                            Style::default().fg(theme_colors.accent),
-                        )
-                    },
-                ]),
-                Line::from(vec![
-                    Span::styled(
-                        "Space",
-                        Style::default()
-                            .fg(theme_colors.primary)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        " Play/Pause ",
-                        Style::default().fg(theme_colors.text_secondary),
-                    ),
-                    Span::styled(
-                        "4",
-                        Style::default()
-                            .fg(theme_colors.primary)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(" Player", Style::default().fg(theme_colors.text_secondary)),
-                ]),
-            ])
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.border)),
-            );
-            frame.render_widget(controls, layout[2]);
-        } else {
-            // No episode playing
-            let no_player = ratatui::widgets::Paragraph::new("No episode playing")
-                .style(
-                    Style::default()
-                        .fg(theme_colors.text_secondary)
-                        .add_modifier(Modifier::ITALIC),
-                )
-                .alignment(Alignment::Center)
-                .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
-                        .border_style(Style::default().fg(theme_colors.border))
-                        .title("🎵 Player")
-                        .title_style(Style::default().fg(theme_colors.accent)),
-                );
-            frame.render_widget(no_player, area);
+    fn push_toast(&mut self, toast: Toast) {
+        // The same message again just restarts its timer.
+        self.toasts.retain(|t| t.text != toast.text);
+        self.toasts.push(toast);
+        if self.toasts.len() > MAX_TOASTS {
+            self.toasts.remove(0);
         }
     }
 
-    fn format_duration_short(duration: std::time::Duration) -> String {
-        let total_seconds = duration.as_secs();
-        let minutes = total_seconds / 60;
-        let seconds = total_seconds % 60;
-        format!("{}:{:02}", minutes, seconds)
-    }
-
-    fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
-        let shortcuts = [
-            ("Tab", "Switch tabs"),
-            ("1-0", "Quick tab"),
-            ("o", "Play on…"),
-            ("Ctrl+R", "Refresh"),
-            ("Ctrl+C/Q", "Quit"),
-        ];
-
-        let footer_text: Vec<Span> = shortcuts
-            .iter()
-            .enumerate()
-            .flat_map(|(i, (key, desc))| {
-                let mut spans = vec![
-                    Span::styled(
-                        *key,
-                        Style::default()
-                            .fg(theme_colors.primary)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!(" {}", desc),
-                        Style::default().fg(theme_colors.text_secondary),
-                    ),
-                ];
-
-                if i < shortcuts.len() - 1 {
-                    spans.push(Span::styled(
-                        "  ",
-                        Style::default().fg(theme_colors.text_secondary),
-                    ));
-                }
-
-                spans
-            })
-            .collect();
-
-        let footer = ratatui::widgets::Paragraph::new(Line::from(footer_text))
-            .alignment(ratatui::layout::Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(theme_colors.border))
-                    .title("🔧 Controls")
-                    .title_style(Style::default().fg(theme_colors.accent)),
-            );
-
-        frame.render_widget(footer, area);
-    }
-
-    fn render_messages_overlay(&self, frame: &mut Frame, area: Rect) {
-        let theme_colors = self.theme_manager.get_colors();
-        let message = if let Some(error) = &self.error_message {
-            Some((format!("❌ {}", error), theme_colors.error, "Error"))
-        } else {
-            self.success_message
-                .as_ref()
-                .map(|success| (format!("✅ {}", success), theme_colors.success, "Success"))
-        };
-
-        if let Some((text, color, title)) = message {
-            // Create a larger popup for better error display
-            let popup_area = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(20),
-                    Constraint::Length(8), // Fixed height popup
-                    Constraint::Percentage(20),
-                ])
-                .split(area)[1];
-
-            let popup_area = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([
-                    Constraint::Percentage(10),
-                    Constraint::Percentage(80),
-                    Constraint::Percentage(10),
-                ])
-                .split(popup_area)[1];
-
-            frame.render_widget(ratatui::widgets::Clear, popup_area);
-
-            let message_widget = ratatui::widgets::Paragraph::new(text)
-                .style(Style::default().fg(color).add_modifier(Modifier::BOLD))
-                .alignment(ratatui::layout::Alignment::Left)
-                .wrap(ratatui::widgets::Wrap { trim: true })
-                .block(
-                    ratatui::widgets::Block::default()
-                        .borders(ratatui::widgets::Borders::ALL)
-                        .border_type(ratatui::widgets::BorderType::Rounded)
-                        .title(format!("{} (Press any key to dismiss)", title))
-                        .border_style(Style::default().fg(color))
-                        .style(Style::default().bg(theme_colors.container)),
-                );
-
-            frame.render_widget(message_widget, popup_area);
-        }
-    }
-
-    async fn refresh_current_page(&mut self) -> Result<()> {
-        self.loading = true;
-
-        let result = match self.active_tab {
-            AppTab::Home => self.home_page.refresh().await,
-            AppTab::Podcasts => self.podcasts_page.refresh().await,
-            AppTab::Episodes => self.episodes_page.refresh().await,
-            AppTab::Player => Ok(()), // Player doesn't need refresh
-            AppTab::Queue => self.queue_page.refresh().await,
-            AppTab::Saved => self.saved_page.refresh().await,
-            AppTab::Downloads => self.downloads_page.refresh().await,
-            AppTab::Search => self.search_page.refresh().await,
-            AppTab::Settings => self.settings_page.refresh().await,
-            AppTab::Devices => Ok(()), // Devices are pushed by the server
-        };
-
-        self.loading = false;
-
-        match result {
-            Ok(_) => {
-                self.show_success_message("Page refreshed successfully");
-            }
-            Err(e) => {
-                self.show_error_message(&format!("Failed to refresh: {}", e));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn selected_episode(&self) -> Option<crate::api::Episode> {
-        match self.active_tab {
-            AppTab::Home => self.home_page.selected_episode(),
-            AppTab::Episodes => self.episodes_page.selected_episode(),
-            AppTab::Podcasts => self.podcasts_page.selected_episode(),
-            AppTab::Queue => self.queue_page.selected_episode(),
-            AppTab::Saved => self.saved_page.selected_episode(),
-            AppTab::Downloads => self.downloads_page.selected_episode(),
-            AppTab::Search => self.search_page.selected_episode(),
-            AppTab::Player | AppTab::Settings | AppTab::Devices => None,
-        }
-    }
-
-    fn open_picker(&mut self) {
-        let Some(episode) = self.selected_episode() else {
-            self.show_error_message("Select an episode first");
-            return;
-        };
-        if self.remote.state().devices.is_empty() {
-            self.show_error_message("No other devices are connected");
-            return;
-        }
-        self.picker = Some(DevicePicker::new(episode));
-    }
-
-    fn handle_picker_input(&mut self, key: ratatui::crossterm::event::KeyEvent) {
-        let Some(picker) = &mut self.picker else {
-            return;
-        };
-        let devices = self.remote.state().devices;
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q') => self.picker = None,
-            KeyCode::Down | KeyCode::Char('j') => picker.move_by(1, devices.len()),
-            KeyCode::Up | KeyCode::Char('k') => picker.move_by(-1, devices.len()),
-            KeyCode::Enter => {
-                if let Some(device) = devices.get(picker.selected()) {
-                    self.remote
-                        .play_on(&device.device_id, picker.episode().key());
-                }
-                self.picker = None;
-            }
-            _ => {}
-        }
-    }
-
-    /// Shows what came of a remote command (offline target, a handoff landing) as a
-    /// toast, whichever tab is open.
     fn show_remote_notice(&mut self) {
         let Some(notice) = self.remote.state().notice else {
             return;
@@ -989,74 +252,814 @@ impl TuiApp {
             return;
         }
         self.notice_seen = Some(notice.at);
-        if notice.is_error {
-            self.show_error_message(&notice.text);
+        let kind = if notice.is_error {
+            ToastKind::Error
         } else {
-            self.show_success_message(&notice.text);
-        }
+            ToastKind::Success
+        };
+        self.bus.toast(kind, notice.text);
     }
 
-    pub fn show_error_message(&mut self, message: &str) {
-        self.error_message = Some(message.to_string());
-        self.success_message = None;
-        self.message_timeout = Some(Instant::now());
-    }
-
-    pub fn show_success_message(&mut self, message: &str) {
-        self.success_message = Some(message.to_string());
-        self.error_message = None;
-        self.message_timeout = Some(Instant::now());
-    }
-
-    fn clear_messages(&mut self) {
-        self.error_message = None;
-        self.success_message = None;
-        self.message_timeout = None;
-    }
-
-    pub async fn initialize(&mut self) -> Result<()> {
-        // Fetch theme from server and sync with local settings
-        match self.client.get_theme().await {
-            Ok(server_theme) => {
-                tracing::info!("Fetched theme from server: {}", server_theme);
-                // Update local settings with server theme
-                if let Ok(mut settings_manager) = crate::settings::SettingsManager::new() {
-                    let _ = settings_manager.update(|s| {
-                        s.theme.theme_name = server_theme.clone();
-                    });
-                    // Update theme manager with server theme
-                    self.theme_manager.set_theme(&server_theme);
-                    // Update all page theme managers
-                    self.settings_page.update_theme(&server_theme);
-                    self.home_page.update_theme(&server_theme);
-                    self.podcasts_page.update_theme(&server_theme);
-                    self.episodes_page.update_theme(&server_theme);
-                    self.player_page.update_theme(&server_theme);
-                    self.queue_page.update_theme(&server_theme);
-                    self.saved_page.update_theme(&server_theme);
-                    self.downloads_page.update_theme(&server_theme);
-                    self.search_page.update_theme(&server_theme);
-                    self.devices_page.update_theme(&server_theme);
-                } else {
-                    tracing::warn!("Could not update local settings with server theme");
+    fn apply_server_theme(&mut self) {
+        let Some(result) = self.server_theme.poll() else {
+            return;
+        };
+        match result {
+            Ok(name) if Theme::exists(&name) => {
+                if self.settings.get().theme.follow_server
+                    && name != self.settings.theme_name()
+                    && let Err(e) = self.settings.update(|s| s.theme.theme_name = name)
+                {
+                    tracing::warn!("couldn't save the theme: {e:#}");
                 }
             }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to fetch theme from server, using local settings: {}",
-                    e
-                );
-                // Continue with local theme - this is not a fatal error
+            // A custom theme from the web app; Firewood only has the built-in ones.
+            Ok(name) => tracing::info!("the web app's theme {name:?} isn't built in; keeping ours"),
+            Err(e) => tracing::warn!("couldn't fetch the theme: {e}"),
+        }
+    }
+
+    /// Picks up settings the Settings page changed.
+    fn apply_settings(&mut self) {
+        let name = self.settings.theme_name();
+        if !name.eq_ignore_ascii_case(&self.theme.name) && Theme::exists(name) {
+            self.theme = Theme::named(name, self.depth);
+        }
+        let order = Section::ordered(&self.settings.get().ui.tab_order);
+        if order != self.order {
+            self.order = order;
+        }
+    }
+
+    fn switch_to(&mut self, section: Section) {
+        if self.current != section {
+            self.current = section;
+            self.with_page(|page, cx| page.show(cx));
+        }
+    }
+
+    fn step_section(&mut self, step: isize) {
+        let len = self.order.len() as isize;
+        let i = self
+            .order
+            .iter()
+            .position(|s| *s == self.current)
+            .unwrap_or(0) as isize;
+        self.switch_to(self.order[(i + step).rem_euclid(len) as usize]);
+    }
+
+    fn apply_outcome(&mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Push(mut page) => {
+                let cx = Ctx {
+                    api: &self.api,
+                    playback: &self.playback,
+                    remote: &self.remote,
+                    bus: &self.bus,
+                    theme: &self.theme,
+                    keymap: &self.keymap,
+                    player: &self.player,
+                    settings: &mut self.settings,
+                    account: &self.account,
+                };
+                page.show(&cx);
+                self.stack_mut(self.current).push(page);
             }
+            Outcome::Pop => self.pop(),
+            Outcome::Handled | Outcome::Ignored => {}
+        }
+    }
+
+    fn pop(&mut self) {
+        let stack = self.stack_mut(self.current);
+        if stack.len() > 1 {
+            stack.pop();
+            self.with_page(|page, cx| page.show(cx));
+        }
+    }
+
+    pub fn key(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        // Ctrl+C always quits, even mid-typing.
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            self.quit = true;
+            return;
+        }
+        if self.help.is_some() {
+            self.help_key(key);
+            return;
+        }
+        if self.picker.is_some() {
+            self.picker_key(key);
+            return;
         }
 
-        // Initialize all pages
-        self.home_page.initialize().await?;
-        self.podcasts_page.initialize().await?;
-        self.queue_page.initialize().await?;
-        self.saved_page.initialize().await?;
-        self.downloads_page.initialize().await?;
+        if let Some(outcome) = self.with_page(|page, cx| page.key(key, cx)) {
+            self.apply_outcome(outcome);
+            return;
+        }
+        if self.page().typing() {
+            return;
+        }
 
-        Ok(())
+        let contexts = self.page().contexts();
+        let action = self.keymap.action(key.into(), contexts);
+        if let Some(action) = action {
+            let outcome = self.with_page(|page, cx| page.action(action, cx));
+            if !matches!(outcome, Outcome::Ignored) {
+                self.apply_outcome(outcome);
+                return;
+            }
+            self.global(action);
+            return;
+        }
+        // Digits go to sidebar entries in the order shown; 0 is the tenth.
+        if let KeyCode::Char(c @ '0'..='9') = key.code
+            && key.modifiers.is_empty()
+        {
+            let index = (c as usize + 10 - '1' as usize) % 10;
+            if let Some(&section) = self.order.get(index) {
+                self.switch_to(section);
+            }
+        }
+    }
+
+    /// Text pasted into the terminal goes to whatever field has focus.
+    pub fn paste(&mut self, text: &str) {
+        if !self.page().typing() {
+            return;
+        }
+        for c in text.chars().filter(|c| !c.is_control()) {
+            let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
+            self.with_page(|page, cx| page.key(key, cx));
+        }
+    }
+
+    /// What an action means when the page doesn't use it.
+    fn global(&mut self, action: Action) {
+        let skip = Duration::from_secs(self.settings.skip_interval());
+        let state = &self.player;
+        let has_episode = state.current_episode.is_some();
+        let result = match action {
+            Action::Quit => {
+                self.quit = true;
+                Ok(())
+            }
+            Action::Help => {
+                self.help = Some(0);
+                Ok(())
+            }
+            Action::NextPage => {
+                self.step_section(1);
+                Ok(())
+            }
+            Action::PrevPage => {
+                self.step_section(-1);
+                Ok(())
+            }
+            Action::Refresh => {
+                self.with_page(|page, cx| page.refresh(cx));
+                Ok(())
+            }
+            Action::Back => {
+                self.pop();
+                Ok(())
+            }
+            Action::NowPlaying => {
+                self.switch_to(Section::Player);
+                Ok(())
+            }
+            Action::PlayOn => {
+                self.open_picker();
+                Ok(())
+            }
+            Action::TogglePlay if has_episode => self.playback.toggle_play_pause(),
+            Action::SeekForward if has_episode => self.playback.skip_forward(skip),
+            Action::SeekBackward if has_episode => self.playback.skip_backward(skip),
+            Action::VolumeUp | Action::VolumeDown => {
+                let step = if action == Action::VolumeUp {
+                    VOLUME_STEP
+                } else {
+                    -VOLUME_STEP
+                };
+                let volume = (state.volume + step).clamp(0.0, 1.0);
+                self.flash = Some((format!("Volume {:.0}%", volume * 100.0), Instant::now()));
+                self.playback.set_volume(volume)
+            }
+            Action::SpeedUp | Action::SpeedDown if has_episode => {
+                let step = if action == Action::SpeedUp {
+                    SPEED_STEP
+                } else {
+                    -SPEED_STEP
+                };
+                let speed = ui::step_speed(state.speed, step);
+                self.flash = Some((format!("Speed {}", ui::speed(speed)), Instant::now()));
+                self.playback.set_speed(speed)
+            }
+            Action::TogglePlay
+            | Action::SeekForward
+            | Action::SeekBackward
+            | Action::SpeedUp
+            | Action::SpeedDown => {
+                self.bus.info("Nothing is playing");
+                Ok(())
+            }
+            _ => Ok(()),
+        };
+        if result.is_err() {
+            self.bus
+                .error("Playback has stopped working; restart Firewood");
+        }
+    }
+
+    fn help_key(&mut self, key: KeyEvent) {
+        let action = self.keymap.action(key.into(), &[Context::List]);
+        let scroll = self.help.unwrap_or(0);
+        self.help = match (key.code, action) {
+            (KeyCode::Esc, _) | (_, Some(Action::Help | Action::Quit | Action::Back)) => None,
+            (_, Some(Action::Down)) => Some(scroll.saturating_add(1)),
+            (_, Some(Action::Up)) => Some(scroll.saturating_sub(1)),
+            (_, Some(Action::PageDown)) => Some(scroll.saturating_add(10)),
+            (_, Some(Action::PageUp)) => Some(scroll.saturating_sub(10)),
+            (_, Some(Action::Top)) => Some(0),
+            _ => Some(scroll),
+        };
+    }
+
+    fn open_picker(&mut self) {
+        let Some(episode) = self.page().selected_episode() else {
+            self.bus.info("Select an episode first");
+            return;
+        };
+        let devices = self.remote.state().devices;
+        if devices.is_empty() {
+            let reason = match self.remote.state().connection {
+                Connection::Connected => "No other devices are connected",
+                _ => "Not connected to the server's remote control",
+            };
+            self.bus.info(reason);
+            return;
+        }
+        let mut picker = DevicePicker::new(episode);
+        picker.sync(&devices);
+        self.picker = Some(picker);
+    }
+
+    fn picker_key(&mut self, key: KeyEvent) {
+        let Some(picker) = &mut self.picker else {
+            return;
+        };
+        let devices = self.remote.state().devices;
+        picker.sync(&devices);
+        let action = self.keymap.action(key.into(), &[Context::List]);
+        match (key.code, action) {
+            (KeyCode::Esc, _) | (_, Some(Action::Back | Action::Quit)) => self.picker = None,
+            (KeyCode::Enter, _) => self.play_on_selected(),
+            (_, Some(action)) => picker.navigate(action),
+            _ => {}
+        }
+    }
+
+    fn play_on_selected(&mut self) {
+        let Some(picker) = self.picker.take() else {
+            return;
+        };
+        let devices = self.remote.state().devices;
+        if let Some(device) = picker.selected().and_then(|i| devices.get(i)) {
+            self.remote
+                .play_on(&device.device_id, picker.episode().key());
+        }
+    }
+
+    pub fn mouse(&mut self, event: MouseEvent) {
+        let at = Position::new(event.column, event.row);
+        let click = matches!(event.kind, MouseEventKind::Down(MouseButton::Left));
+        if self.help.is_some() {
+            if click {
+                self.help = None;
+            } else if event.kind == MouseEventKind::ScrollDown {
+                self.help = self.help.map(|s| s.saturating_add(3));
+            } else if event.kind == MouseEventKind::ScrollUp {
+                self.help = self.help.map(|s| s.saturating_sub(3));
+            }
+            return;
+        }
+        if let Some(picker) = &mut self.picker {
+            match picker.mouse(event) {
+                Click::Activated => self.play_on_selected(),
+                Click::Missed if click => self.picker = None,
+                _ => {}
+            }
+            return;
+        }
+        if click {
+            if let Some(&(_, section)) = self.sidebar_rows.iter().find(|(r, _)| r.contains(at)) {
+                self.switch_to(section);
+                return;
+            }
+            if self.play_button.contains(at) {
+                self.global(Action::TogglePlay);
+                return;
+            }
+            if self.progress.contains(at) {
+                let total = self.player.total_duration;
+                if !total.is_zero() && self.progress.width > 0 {
+                    let ratio =
+                        f64::from(event.column - self.progress.x) / f64::from(self.progress.width);
+                    let _ = self.playback.seek(total.mul_f64(ratio.clamp(0.0, 1.0)));
+                }
+                return;
+            }
+            if let Some(i) = self.toast_at(at) {
+                self.toasts.remove(i);
+                return;
+            }
+        }
+        if self.content.contains(at) {
+            let outcome = self.with_page(|page, cx| page.mouse(event, cx));
+            self.apply_outcome(outcome);
+        }
+    }
+
+    pub fn render(&mut self, frame: &mut Frame) {
+        let area = frame.area();
+        frame.render_widget(Block::new().style(self.theme.base()), area);
+
+        let [main, nowbar, footer] = Layout::vertical([
+            Constraint::Min(3),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(area);
+
+        let content_area = if area.width >= SIDEBAR_MIN_TERMINAL {
+            let compact = area.width < SIDEBAR_FULL_TERMINAL;
+            let width = if compact {
+                SIDEBAR_COMPACT_WIDTH
+            } else {
+                SIDEBAR_WIDTH
+            };
+            let [sidebar, content] =
+                Layout::horizontal([Constraint::Length(width), Constraint::Min(0)]).areas(main);
+            self.render_sidebar(frame, sidebar, compact);
+            content
+        } else {
+            self.sidebar_rows.clear();
+            main
+        };
+
+        let [header, _, body] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(pad(content_area, 2, 1));
+        self.render_header(frame, header);
+        self.content = body;
+        self.with_page(|page, cx| page.render(frame, body, cx));
+
+        self.render_nowbar(frame, nowbar);
+        self.render_footer(frame, footer);
+        self.render_toasts(frame, main);
+
+        if let Some(picker) = &mut self.picker {
+            let devices = self.remote.state().devices;
+            picker.sync(&devices);
+            picker.render(frame, area, &self.theme, &devices);
+        }
+        if self.help.is_some() {
+            self.render_help(frame, area);
+        }
+    }
+
+    fn render_sidebar(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
+        let theme = &self.theme;
+        let block = Block::new()
+            .borders(Borders::RIGHT)
+            .border_style(theme.border(false));
+        let inner = pad(block.inner(area), 1, 0);
+        frame.render_widget(block, area);
+
+        let [logo, _, entries, status] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .areas(Rect {
+            y: area.y + 1,
+            height: area.height.saturating_sub(1),
+            ..inner
+        });
+        let name = if compact { "" } else { "Firewood" };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("▲ ", Style::new().fg(theme.success)),
+                Span::styled(name, theme.heading()),
+            ])),
+            logo,
+        );
+
+        self.sidebar_rows.clear();
+        for (i, section) in self.order.iter().enumerate() {
+            if i as u16 >= entries.height {
+                break;
+            }
+            let row = Rect {
+                y: entries.y + i as u16,
+                height: 1,
+                ..entries
+            };
+            let digit = match i {
+                0..=8 => (i + 1).to_string(),
+                9 => "0".to_string(),
+                _ => " ".to_string(),
+            };
+            let current = *section == self.current;
+            let label = if compact {
+                format!(" {}", section.icon())
+            } else {
+                format!(" {} {}", section.icon(), section.title())
+            };
+            let pad_to = usize::from(row.width.saturating_sub(3));
+            let label = format!("{label:<pad_to$}");
+            let line = Line::from(vec![
+                Span::styled(format!("{digit} "), theme.faint()),
+                Span::styled(label, if current { theme.active } else { theme.muted() }),
+            ]);
+            frame.render_widget(Paragraph::new(line), row);
+            self.sidebar_rows.push((row, *section));
+        }
+
+        let remote = self.remote.state();
+        let (dot, color, text) = match remote.connection {
+            Connection::Connected => ("●", theme.success, "Remote on".to_string()),
+            Connection::Connecting => ("○", theme.warning, "Connecting…".to_string()),
+            Connection::Offline { .. } => ("○", theme.error, "Remote offline".to_string()),
+            Connection::Disabled => ("○", theme.faint, "Remote off".to_string()),
+        };
+        let others = remote.devices.len();
+        if compact {
+            let count = if others > 0 {
+                others.to_string()
+            } else {
+                String::new()
+            };
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(format!("{dot} "), Style::new().fg(color)),
+                    Span::styled(count, theme.faint()),
+                ])),
+                status,
+            );
+            return;
+        }
+        let devices = match others {
+            0 => String::new(),
+            1 => " · 1 device".into(),
+            n => format!(" · {n} devices"),
+        };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled(format!("{dot} "), Style::new().fg(color)),
+                    Span::styled(format!("{text}{devices}"), theme.faint()),
+                ]),
+                Line::styled(
+                    truncate(&self.account, usize::from(status.width)),
+                    theme.faint(),
+                ),
+            ]),
+            status,
+        );
+    }
+
+    fn render_header(&self, frame: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let stack = self.stack(self.current);
+        let mut spans = Vec::new();
+        let titles: Vec<String> = stack.iter().map(|p| p.title()).collect();
+        let last = titles.len() - 1;
+        let budget = usize::from(area.width.saturating_sub(4));
+        let crumb_width = budget / titles.len().max(1);
+        for (i, title) in titles.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(" › ", theme.faint()));
+            }
+            let style = if i == last {
+                theme.heading()
+            } else {
+                theme.muted()
+            };
+            let width = if i == last {
+                budget
+            } else {
+                crumb_width.min(24)
+            };
+            spans.push(Span::styled(truncate(title, width), style));
+        }
+        if self.page().busy() {
+            spans.push(Span::styled(format!("  {}", ui::spinner()), theme.accent()));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
+
+    fn render_nowbar(&mut self, frame: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let block = Block::new()
+            .borders(Borders::TOP)
+            .border_style(theme.border(false));
+        let inner = pad(block.inner(area), 2, 0);
+        frame.render_widget(block, area);
+        self.play_button = Rect::default();
+        self.progress = Rect::default();
+
+        let state = &self.player;
+        let Some(episode) = &state.current_episode else {
+            frame.render_widget(
+                Paragraph::new(Line::styled(
+                    "Nothing playing. Press Enter on an episode to start it.",
+                    theme.faint(),
+                )),
+                inner,
+            );
+            return;
+        };
+        let [top, bottom] =
+            Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+
+        let (icon, icon_style) = match &state.playback_state {
+            PlaybackState::Playing if state.buffering => (ui::spinner(), theme.accent()),
+            PlaybackState::Playing => ("▶", theme.accent()),
+            PlaybackState::Paused => ("⏸", theme.muted()),
+            PlaybackState::Loading => (ui::spinner(), theme.accent()),
+            PlaybackState::Stopped => ("■", theme.muted()),
+            PlaybackState::Error(_) => ("!", Style::new().fg(theme.error)),
+        };
+        let mut right: Vec<Span> = Vec::new();
+        match (&self.flash, &state.playback_state) {
+            (Some((text, _)), _) => right.push(Span::styled(text.clone(), theme.accent())),
+            (_, PlaybackState::Error(msg)) => right.push(Span::styled(
+                truncate(msg, 40),
+                Style::new().fg(theme.error),
+            )),
+            (_, PlaybackState::Loading) if state.reconnecting.is_some() => {
+                right.push(Span::styled(
+                    "Reconnecting…",
+                    Style::new().fg(theme.warning),
+                ));
+            }
+            _ if state.buffering => {
+                right.push(Span::styled("Buffering…", Style::new().fg(theme.warning)));
+            }
+            _ => {
+                if (state.speed - 1.0).abs() > 0.01 {
+                    right.push(Span::styled(ui::speed(state.speed), theme.accent()));
+                    right.push(Span::raw("  "));
+                }
+                right.push(Span::styled(
+                    format!("vol {:.0}%", state.volume * 100.0),
+                    theme.faint(),
+                ));
+            }
+        }
+        let right_width: u16 = right.iter().map(|s| s.content.width() as u16).sum();
+        let [play, title_area, right_area] = Layout::horizontal([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(right_width + 2),
+        ])
+        .areas(top);
+        self.play_button = play;
+        frame.render_widget(Paragraph::new(Span::styled(icon, icon_style)), play);
+        let podcast = episode.podcast_name.clone().unwrap_or_default();
+        let title_budget = usize::from(title_area.width);
+        let title = truncate(&episode.episode_title, title_budget * 2 / 3);
+        let rest = title_budget.saturating_sub(title.width() + 3);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(title, theme.base().add_modifier(Modifier::BOLD)),
+                Span::styled("  ", theme.faint()),
+                Span::styled(truncate(&podcast, rest), theme.muted()),
+            ])),
+            title_area,
+        );
+        frame.render_widget(
+            Paragraph::new(Line::from(right)).alignment(Alignment::Right),
+            right_area,
+        );
+
+        let elapsed = ui::clock(state.current_position);
+        let total = ui::clock(state.total_duration);
+        let [_, start, bar, end] = Layout::horizontal([
+            Constraint::Length(3),
+            Constraint::Length(elapsed.width() as u16 + 1),
+            Constraint::Min(0),
+            Constraint::Length(total.width() as u16 + 1),
+        ])
+        .areas(bottom);
+        let ratio = if state.total_duration.is_zero() {
+            0.0
+        } else {
+            state.current_position.as_secs_f64() / state.total_duration.as_secs_f64()
+        };
+        frame.render_widget(Paragraph::new(Span::styled(elapsed, theme.muted())), start);
+        frame.render_widget(
+            Paragraph::new(Line::from(ui::bar(ratio, bar.width, theme))),
+            bar,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(total, theme.muted())).alignment(Alignment::Right),
+            end,
+        );
+        self.progress = bar;
+    }
+
+    fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let area = pad(area, 2, 0);
+        let page = self.page();
+        let contexts = page.contexts();
+        let (left, right) = if page.typing() {
+            (
+                vec![
+                    Span::styled("Enter", theme.key()),
+                    Span::styled(" done  ", theme.muted()),
+                    Span::styled("Esc", theme.key()),
+                    Span::styled(" cancel", theme.muted()),
+                ],
+                Vec::new(),
+            )
+        } else {
+            let mut right = ui::hints(&[Action::Help, Action::Quit], contexts, &self.keymap, theme);
+            if self.stack(self.current).len() > 1 {
+                let mut back = ui::hints(&[Action::Back], contexts, &self.keymap, theme);
+                back.push(Span::styled("  ", theme.faint()));
+                back.append(&mut right);
+                right = back;
+            }
+            (
+                ui::hints(page.hints(), contexts, &self.keymap, theme),
+                right,
+            )
+        };
+        let width = |spans: &[Span]| spans.iter().map(|s| s.content.width() as u16).sum::<u16>();
+        let right_width = width(&right);
+        // Drop hints from the end until the rest fit; past the first, each hint is a
+        // gap, a key and a description.
+        let room = area.width.saturating_sub(right_width + 2);
+        let mut left = left;
+        while width(&left) > room && left.len() > 3 {
+            left.truncate(left.len() - 3);
+        }
+        let [left_area, right_area] =
+            Layout::horizontal([Constraint::Min(0), Constraint::Length(right_width)]).areas(area);
+        frame.render_widget(Paragraph::new(Line::from(left)), left_area);
+        frame.render_widget(Paragraph::new(Line::from(right)), right_area);
+    }
+
+    /// Where each toast is drawn: stacked up from the bottom right of `area`.
+    fn toast_rects(&self, area: Rect) -> Vec<Rect> {
+        let mut y = area.bottom().saturating_sub(1);
+        let max_width = area.width.saturating_sub(4).min(64);
+        self.toasts
+            .iter()
+            .rev()
+            .map(|t| {
+                let width = (t.text.width() as u16 + 4).min(max_width);
+                let rect = Rect {
+                    x: area.right().saturating_sub(width + 2),
+                    y,
+                    width,
+                    height: 1,
+                };
+                y = y.saturating_sub(1);
+                rect
+            })
+            .collect()
+    }
+
+    fn toast_at(&self, at: Position) -> Option<usize> {
+        let area = self.toast_area?;
+        let count = self.toasts.len();
+        self.toast_rects(area)
+            .iter()
+            .position(|r| r.contains(at))
+            .map(|i| count - 1 - i)
+    }
+
+    fn render_toasts(&mut self, frame: &mut Frame, area: Rect) {
+        self.toast_area = Some(area);
+        let theme = &self.theme;
+        for (toast, rect) in self.toasts.iter().rev().zip(self.toast_rects(area)) {
+            let (mark, color) = match toast.kind {
+                ToastKind::Info => ("•", theme.accent),
+                ToastKind::Success => ("✓", theme.success),
+                ToastKind::Error => ("!", theme.error),
+            };
+            frame.render_widget(Clear, rect);
+            let text = truncate(&toast.text, usize::from(rect.width.saturating_sub(4)));
+            frame.render_widget(
+                Paragraph::new(Line::from(vec![
+                    Span::styled(
+                        format!(" {mark} "),
+                        Style::new().fg(color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(text),
+                    Span::raw(" "),
+                ]))
+                .style(theme.surface()),
+                rect,
+            );
+        }
+    }
+
+    fn render_help(&mut self, frame: &mut Frame, area: Rect) {
+        let theme = &self.theme;
+        let page_contexts = self.page().contexts();
+        let mut contexts: Vec<Context> = page_contexts.to_vec();
+        contexts.push(Context::Global);
+
+        let mut lines: Vec<Line> = Vec::new();
+        for context in &contexts {
+            let bindings = self.keymap.bindings(*context);
+            if bindings.is_empty() {
+                continue;
+            }
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.push(Line::styled(context.title(), theme.heading()));
+            for (action, keys) in bindings {
+                // A binding the page's own context overrides doesn't apply here.
+                let live: Vec<String> = keys
+                    .iter()
+                    .filter(|k| self.keymap.action(**k, page_contexts) == Some(*action))
+                    .map(ToString::to_string)
+                    .collect();
+                if live.is_empty() {
+                    continue;
+                }
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {:<16}", live.join(" ")), theme.key()),
+                    Span::styled(action.description(), theme.base()),
+                ]));
+            }
+        }
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<16}", "1–9 0"), theme.key()),
+            Span::styled("Go to a sidebar entry", theme.base()),
+        ]));
+        lines.push(Line::default());
+        let path = Keymap::path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "keymap.toml".into());
+        lines.push(Line::styled(
+            format!("Rebind keys in {path}"),
+            theme.faint(),
+        ));
+        lines.push(Line::styled(
+            "Mouse: click to select, click again to open, wheel to scroll",
+            theme.faint(),
+        ));
+
+        let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+        let rect = ui::centered(area, 64, height);
+        let inner = ui::popup(frame, rect, "Keys", theme);
+        let total = lines.len();
+        let [body, hint] = if total > usize::from(inner.height) {
+            Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(inner)
+        } else {
+            [inner, Rect::default()]
+        };
+        let max_scroll = (total as u16).saturating_sub(body.height);
+        let scroll = self.help.unwrap_or(0).min(max_scroll);
+        self.help = Some(scroll);
+        frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), body);
+        ui::scrollbar(frame, body, total, usize::from(scroll), theme);
+        frame.render_widget(
+            Paragraph::new(Line::styled("j/k scroll · Esc close", theme.faint()))
+                .alignment(Alignment::Right),
+            hint,
+        );
+    }
+}
+
+fn toast_life(kind: ToastKind) -> Duration {
+    match kind {
+        ToastKind::Error => Duration::from_secs(8),
+        _ => Duration::from_secs(4),
+    }
+}
+
+/// `area` shrunk by `x` columns each side and `y` rows top and bottom.
+fn pad(area: Rect, x: u16, y: u16) -> Rect {
+    Rect {
+        x: area.x + x.min(area.width / 2),
+        y: area.y + y.min(area.height / 2),
+        width: area.width.saturating_sub(2 * x),
+        height: area.height.saturating_sub(2 * y),
     }
 }

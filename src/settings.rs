@@ -6,8 +6,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
-    /// Auto-load episodes when navigating in podcasts/downloads
-    pub auto_load_episodes: bool,
     /// Volume level (0.0 to 1.0)
     pub default_volume: f32,
     /// Skip interval in seconds
@@ -25,7 +23,9 @@ pub struct AppSettings {
 #[serde(default)]
 pub struct ThemeSettings {
     pub theme_name: String,
-    pub use_borders: bool,
+    /// Use the theme chosen in the web app, which is fetched at startup. Picking a
+    /// theme in Firewood turns this off.
+    pub follow_server: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,14 +46,13 @@ pub struct RemoteSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiSettings {
-    /// Custom tab order - list of tab names in order
+    /// Sidebar order, by section name.
     pub tab_order: Vec<String>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            auto_load_episodes: true, // Default enabled
             default_volume: 0.7,
             skip_interval: 15,
             theme: ThemeSettings::default(),
@@ -67,8 +66,8 @@ impl Default for AppSettings {
 impl Default for ThemeSettings {
     fn default() -> Self {
         Self {
-            theme_name: "Light".to_string(),
-            use_borders: true,
+            theme_name: crate::theme::DEFAULT_THEME.to_string(),
+            follow_server: true,
         }
     }
 }
@@ -76,18 +75,20 @@ impl Default for ThemeSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
-            tab_order: vec![
-                "Home".to_string(),
-                "Player".to_string(),
-                "Feed".to_string(),
-                "Podcasts".to_string(),
-                "Queue".to_string(),
-                "Saved".to_string(),
-                "Downloads".to_string(),
-                "Search".to_string(),
-                "Settings".to_string(),
-                "Devices".to_string(),
-            ],
+            tab_order: [
+                "Home",
+                "Feed",
+                "Podcasts",
+                "Queue",
+                "Saved",
+                "Downloads",
+                "Search",
+                "Devices",
+                "Player",
+                "Settings",
+            ]
+            .map(String::from)
+            .to_vec(),
         }
     }
 }
@@ -163,10 +164,6 @@ impl SettingsManager {
     }
 
     // Convenience getters
-    pub fn auto_load_episodes(&self) -> bool {
-        self.settings.auto_load_episodes
-    }
-
     pub fn default_volume(&self) -> f32 {
         self.settings.default_volume
     }
@@ -200,14 +197,11 @@ impl SettingsManager {
 /// Output devices as `(value, label)` pairs for the settings page, with the system
 /// default first.
 pub fn get_available_audio_devices() -> Vec<(String, String)> {
-    let mut devices = vec![("default".to_string(), "System Default".to_string())];
+    let mut devices = vec![("default".to_string(), "System default".to_string())];
     devices.extend(
         crate::audio::engine::output_device_names()
             .into_iter()
-            .map(|name| {
-                let label = crate::tui::text::truncate(&name, 40);
-                (name, label)
-            }),
+            .map(|name| (name.clone(), name)),
     );
     devices
 }

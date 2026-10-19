@@ -16,6 +16,7 @@ chrono-tz = "0.10.4"
 dirs = "7.0.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 getrandom = "0.3.4"
+html2text = "0.17.4"
 keyring = "4.2.0"
 ratatui = { version = "0.30.2", features = ["serde"] }
 reqwest = { version = "0.13.5", features = ["json", "query", "gzip"] }
