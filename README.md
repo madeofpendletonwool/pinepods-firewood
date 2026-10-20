@@ -11,6 +11,8 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Pages**: Home, Feed, Podcasts, Queue, Saved (with your collections), Playlists, History, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes, chapters and transcripts
 - **Find and follow podcasts**: search Podcast Index, iTunes and YouTube and subscribe from the terminal
 - **Filter as you type**: `/` narrows any list; Search queries your server as you type
+- **Cover art**: on Now Playing, an episode's details and the now-playing bar, as real images in terminals with the kitty, sixel or iTerm2 graphics protocols and in blocks of color elsewhere (turn it off in Settings)
+- **Command palette**: `:` or Ctrl+P finds any command, page, podcast or loaded episode by a few letters of its name
 - **Themes**: the same 25 themes as the PinePods web app, starting with the one you picked there, or your terminal's own colors
 - **Keys you can change**: vim-style and arrow keys by default, `?` lists them, `keymap.toml` rebinds them
 - **Mouse**: click to select, click again to play or open, scroll lists, click the progress bar to seek
@@ -26,6 +28,7 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Chapters and transcripts**: Now Playing lists an episode's chapters and follows along in its transcript; Enter jumps to a chapter or line
 - **Progress Tracking**: Resumes where you left off and saves your position to the server while you listen
 - **Reconnects**: Rides out short network drops and picks up where you were
+- **Media keys**: the keyboard's play/pause and next/previous keys work, and what's playing shows in Control Center on macOS and in the desktop's media controls on Linux (MPRIS, so `playerctl` works too). Next and previous skip by the skip length
 - **Formats**: MP3, AAC/M4A, FLAC, Ogg Vorbis and WAV
 
 ## 🚀 Installation
@@ -105,6 +108,7 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 - **j/k** or **↑/↓** move, **g/G** first/last, **Ctrl+D/U** page down/up
 - **Enter** plays an episode or opens a podcast. **i** (or **l**) opens an episode's details and show notes. **Esc** goes back
 - **/** filters the list you're on; **Enter** keeps the filter, **Esc** clears it
+- **:** or **Ctrl+P** opens the command palette: type a few letters of a command, a page ("go queue"), one of your podcasts, an episode on screen somewhere ("play …") or a recent search, then **Enter**
 - **?** shows every key for the page you're on. **q** quits (**Ctrl+C** works anywhere, even mid-typing)
 
 ### Playing
@@ -130,7 +134,7 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 - **Downloads**: the episodes your server has a copy of, by podcast
 - **Search**: episodes from the podcasts you follow, as you type. **f** switches to finding new podcasts on Podcast Index, iTunes or YouTube: type a name, press **Enter**, then **s** subscribes (or **Enter** shows more about one first)
 - **Devices**: your other players (see [Remote Control](#-remote-control))
-- **Settings**: theme, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
+- **Settings**: theme, cover art, media keys, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
 
 ### Themes
 Firewood starts with the theme you picked in the PinePods web app, so a change there
@@ -159,20 +163,33 @@ Clicking selects, clicking the selected row again plays or opens it, and the whe
 scrolls. With the mouse on, selecting text in most terminals needs Shift (Option in
 some macOS terminals) held down; `FIREWOOD_NO_MOUSE=1` turns it off.
 
+### Cover art
+Firewood asks the terminal at startup which image protocol it speaks: kitty (kitty,
+Ghostty), sixel (foot, Konsole, xterm started with `-ti vt340`) or iTerm2 (iTerm2,
+WezTerm). Anywhere else covers are drawn in half-block characters. Inside tmux,
+images need `set -g allow-passthrough on`; if detection still guesses wrong, set
+`FIREWOOD_GRAPHICS` to `kitty`, `sixel`, `iterm2` or `blocks`. Covers come through
+your server's image proxy and are cached under the platform's cache directory
+(`~/Library/Caches/pinepods-firewood/art` on macOS, `~/.cache/pinepods-firewood/art`
+on Linux), trimmed to 64 MB.
+
 ## 🔧 Development
 
 ### Project Structure
 ```
 src/
 ├── api/           # Typed PinePods API client
+├── art/           # Cover art: fetching, caching, decoding
 ├── audio/         # Audio output thread
 ├── auth/          # Login flow and saved session
+├── mediakeys/     # Media keys: MPRIS on Linux, Now Playing on macOS
 ├── nowplaying/    # Remote control over the server's now-playing socket
 ├── playback/      # Playback core and progress sync
 ├── theme/         # The web app's themes, adapted for a terminal
 └── tui/           # Terminal user interface
     ├── app.rs     # Sidebar, now-playing bar, overlays, input routing
     ├── keymap.rs  # Default bindings and keymap.toml
+    ├── palette.rs # The command palette
     ├── task.rs    # Background loading
     ├── ui/        # Shared widgets: lists, episode rows, show notes
     └── pages/     # The screens
@@ -219,6 +236,17 @@ beam episodes to Firewood like to any other device, and it accepts their command
   than the now-playing release, or a reverse proxy in front of it doesn't pass
   WebSocket upgrades on `/ws/api/` through.
 
+## ⏯️ Media Keys
+
+Firewood shows what's playing to the system and takes its play, pause, skip and seek
+commands: through MPRIS on Linux (the desktop's media widget, `playerctl`, most
+desktops' media keys) and through Now Playing on macOS (Control Center, the lock
+screen, the keyboard's media keys). It works the same whatever the terminal.
+
+- Next and previous skip forward and back by the skip length.
+- Turn it off in Settings, or for one run with `FIREWOOD_MEDIA_KEYS=0`.
+- On Linux it needs a D-Bus session; without one Firewood logs a warning and carries on.
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -248,12 +276,12 @@ This project is licensed under the GNU General Public License v3.0; see the [LIC
 
 ## 🗺️ Roadmap
 
-- [ ] History, playlists and collections
-- [ ] Chapters and transcripts
-- [ ] Podcast discovery and subscribing
-- [ ] A command palette
-- [ ] Cover art in terminals that can show images
-- [ ] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
+- [x] History, playlists and collections
+- [x] Chapters and transcripts
+- [x] Podcast discovery and subscribing
+- [x] A command palette
+- [x] Cover art in terminals that can show images
+- [x] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
 - [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on
 
 ---

@@ -23,7 +23,8 @@ use ratatui::{
 
 use super::keymap::{Action, Context, Keymap};
 use super::task::{Bus, Resource};
-use crate::api::{Api, Episode};
+use super::ui::cover::Covers;
+use crate::api::{Api, Episode, Podcast};
 use crate::nowplaying::NowPlaying;
 use crate::playback::{Playback, PlayerState};
 use crate::settings::SettingsManager;
@@ -42,6 +43,7 @@ pub struct Ctx<'a> {
     pub settings: &'a mut SettingsManager,
     /// `user on server`, for Settings.
     pub account: &'a str,
+    pub covers: &'a Covers,
 }
 
 /// What handling an input led to.
@@ -106,6 +108,16 @@ pub trait Page {
     /// The episode under the cursor, for "Play on device".
     fn selected_episode(&self) -> Option<Episode> {
         None
+    }
+
+    /// Episodes the page has loaded, for the command palette.
+    fn episodes(&self) -> Vec<&Episode> {
+        Vec::new()
+    }
+
+    /// Podcasts the page has loaded, for the command palette.
+    fn podcasts(&self) -> Vec<&Podcast> {
+        Vec::new()
     }
 }
 

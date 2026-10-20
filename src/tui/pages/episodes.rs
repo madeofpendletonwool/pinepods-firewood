@@ -484,4 +484,8 @@ impl Page for EpisodeListPage {
             .and_then(|i| self.shown.get(i))
             .cloned()
     }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        self.data.data.iter().flatten().collect()
+    }
 }

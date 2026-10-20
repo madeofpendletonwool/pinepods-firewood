@@ -1,6 +1,8 @@
 pub mod api;
+pub mod art;
 pub mod audio;
 pub mod auth;
+pub mod mediakeys;
 pub mod nowplaying;
 pub mod paths;
 pub mod playback;

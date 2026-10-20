@@ -229,4 +229,8 @@ impl Page for PodcastsPage {
                 cells
             });
     }
+
+    fn podcasts(&self) -> Vec<&Podcast> {
+        self.items().iter().collect()
+    }
 }

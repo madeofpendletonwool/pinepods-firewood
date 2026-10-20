@@ -1,5 +1,6 @@
 //! Pieces every page draws with.
 
+pub mod cover;
 pub mod details;
 pub mod episodes;
 pub mod list;

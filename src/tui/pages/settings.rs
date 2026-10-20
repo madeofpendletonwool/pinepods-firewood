@@ -13,7 +13,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{Ctx, Outcome, Page, Section};
-use crate::settings::get_available_audio_devices;
+use crate::settings::{CoverArt, get_available_audio_devices};
 use crate::theme::Theme;
 use crate::tui::keymap::{self, Action, Context, Keymap};
 use crate::tui::task::Pending;
@@ -26,6 +26,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 enum Item {
     Theme,
     FollowServer,
+    CoverArt,
+    MediaKeys,
     Volume,
     SkipInterval,
     Output,
@@ -38,9 +40,11 @@ enum Item {
 }
 
 impl Item {
-    const ALL: [Item; 11] = [
+    const ALL: [Item; 13] = [
         Self::Theme,
         Self::FollowServer,
+        Self::CoverArt,
+        Self::MediaKeys,
         Self::Volume,
         Self::SkipInterval,
         Self::Output,
@@ -56,6 +60,8 @@ impl Item {
         match self {
             Self::Theme => "Theme",
             Self::FollowServer => "Use the web app's theme",
+            Self::CoverArt => "Cover art",
+            Self::MediaKeys => "Media keys",
             Self::Volume => "Starting volume",
             Self::SkipInterval => "Skip by",
             Self::Output => "Audio output",
@@ -73,6 +79,13 @@ impl Item {
             Self::Theme => "Enter to choose. The same themes as the web app.",
             Self::FollowServer => {
                 "Enter to toggle. When on, Firewood matches the web app at startup."
+            }
+            Self::CoverArt => {
+                "Enter to toggle. Shown with the terminal's image support, or in blocks of color."
+            }
+            Self::MediaKeys => {
+                "Enter to toggle. The keyboard's media keys and the system's now-playing \
+                 controls. Applies the next time Firewood starts."
             }
             Self::Volume => "←/→ to change. Where volume starts each time Firewood opens.",
             Self::SkipInterval => "←/→ to change. How far the skip keys jump.",
@@ -237,6 +250,8 @@ impl SettingsPage {
         match item {
             Item::Theme => cx.theme.name.clone(),
             Item::FollowServer => if s.theme.follow_server { "on" } else { "off" }.into(),
+            Item::CoverArt => cx.covers.describe(s.ui.cover_art),
+            Item::MediaKeys => if s.media_keys { "on" } else { "off" }.into(),
             Item::Volume => format!("{:.0}%", s.default_volume * 100.0),
             Item::SkipInterval => format!("{} seconds", s.skip_interval),
             Item::Output => s
@@ -287,6 +302,13 @@ impl SettingsPage {
             Item::FollowServer => {
                 Self::save(cx, |s| s.theme.follow_server = !s.theme.follow_server)
             }
+            Item::MediaKeys => Self::save(cx, |s| s.media_keys = !s.media_keys),
+            Item::CoverArt => Self::save(cx, |s| {
+                s.ui.cover_art = match s.ui.cover_art {
+                    CoverArt::Auto => CoverArt::Off,
+                    CoverArt::Off => CoverArt::Auto,
+                }
+            }),
             _ => {}
         }
     }
@@ -310,7 +332,7 @@ impl SettingsPage {
                     original: cx.settings.theme_name().to_string(),
                 });
             }
-            Item::FollowServer => self.adjust(cx, 1),
+            Item::FollowServer | Item::CoverArt | Item::MediaKeys => self.adjust(cx, 1),
             Item::Output => {
                 self.popup = Some(Popup::LoadingDevices(Pending::spawn(async {
                     tokio::task::spawn_blocking(get_available_audio_devices)
@@ -645,7 +667,11 @@ impl Page for SettingsPage {
         };
         if matches!(
             self.selected(),
-            Item::Volume | Item::SkipInterval | Item::FollowServer
+            Item::Volume
+                | Item::SkipInterval
+                | Item::FollowServer
+                | Item::CoverArt
+                | Item::MediaKeys
         ) {
             self.adjust(cx, step);
             return Some(Outcome::Handled);

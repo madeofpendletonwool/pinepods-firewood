@@ -30,6 +30,13 @@ pub fn log_dir() -> io::Result<PathBuf> {
     Ok(dir)
 }
 
+/// The platform's cache directory, for things that can be fetched again.
+pub fn cache_dir() -> io::Result<PathBuf> {
+    let base = dirs::cache_dir()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no cache directory"))?;
+    Ok(base.join(APP_DIR))
+}
+
 /// Writes `contents` so that only the current user can read it, replacing the file
 /// atomically so a crash mid-write can't leave a truncated session behind.
 pub fn write_private(path: &Path, contents: &[u8]) -> io::Result<()> {

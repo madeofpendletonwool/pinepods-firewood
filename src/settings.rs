@@ -17,6 +17,8 @@ pub struct AppSettings {
     /// UI settings
     pub ui: UiSettings,
     pub remote: RemoteSettings,
+    /// Media keys and the system's now-playing controls (MPRIS, Control Center).
+    pub media_keys: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +50,17 @@ pub struct RemoteSettings {
 pub struct UiSettings {
     /// Sidebar order, by section name.
     pub tab_order: Vec<String>,
+    pub cover_art: CoverArt,
+}
+
+/// Whether to show cover art.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CoverArt {
+    /// With the terminal's graphics protocol, or as blocks of color without one.
+    #[default]
+    Auto,
+    Off,
 }
 
 impl Default for AppSettings {
@@ -59,6 +72,7 @@ impl Default for AppSettings {
             audio: AudioSettings::default(),
             ui: UiSettings::default(),
             remote: RemoteSettings::default(),
+            media_keys: true,
         }
     }
 }
@@ -91,6 +105,7 @@ impl Default for UiSettings {
             ]
             .map(String::from)
             .to_vec(),
+            cover_art: CoverArt::default(),
         }
     }
 }
@@ -184,6 +199,14 @@ impl SettingsManager {
 
     pub fn theme_name(&self) -> &str {
         &self.settings.theme.theme_name
+    }
+
+    pub fn media_keys(&self) -> bool {
+        self.settings.media_keys
+    }
+
+    pub fn cover_art(&self) -> bool {
+        self.settings.ui.cover_art == CoverArt::Auto
     }
 
     pub fn tab_order(&self) -> &Vec<String> {

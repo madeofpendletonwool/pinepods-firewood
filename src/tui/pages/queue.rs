@@ -341,6 +341,10 @@ impl Page for QueuePage {
             .and_then(|i| self.items().get(i))
             .map(|q| q.episode.clone())
     }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        self.items().iter().map(|q| &q.episode).collect()
+    }
 }
 
 #[cfg(test)]
