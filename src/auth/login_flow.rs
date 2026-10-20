@@ -1,48 +1,78 @@
-//! The login state machine behind the login screen.
+//! The login steps behind the login screen.
+//!
+//! Each step is a future that owns everything it needs, so the screen can run it in
+//! the background and keep drawing. What a later step needs from an earlier one (the
+//! MFA session, an account waiting on first-run setup) comes back in the
+//! [`LoginResult`] and is handed back in by the screen.
 
 use anyhow::Result;
 
 use super::auth_manager::{AuthManager, LoginOutcome, hash_password};
 use super::models::*;
 use super::session_storage::SessionStorage;
+use crate::api::ApiError;
 use crate::api::http::normalize_server_url;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum LoginResult {
     Success(Box<SessionInfo>),
     ServerVerified,
-    MfaRequired,
     FirstAdminRequired,
+    MfaRequired(MfaSession),
     /// Logged in, but the account hasn't been through first-run setup yet.
-    FirstTimeSetup,
+    FirstTimeSetup(Box<AuthState>),
     Error(String),
 }
 
-/// What the flow is waiting on between screens.
-enum Pending {
-    None,
-    Mfa {
-        server: String,
-        mfa_session_token: String,
-    },
-    Setup(Box<AuthState>),
+/// A login waiting on its second factor.
+pub struct MfaSession {
+    server: String,
+    token: String,
 }
 
+impl std::fmt::Debug for MfaSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MfaSession")
+            .field("server", &self.server)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What starting up found in the saved session.
+#[derive(Debug)]
+pub enum Restored {
+    Session(Box<SessionInfo>),
+    /// Nothing saved.
+    None,
+    /// The saved key was revoked; the server it was for, to sign in again.
+    Rejected {
+        server: String,
+    },
+}
+
+/// The fields of a new administrator account.
+pub struct NewAdmin {
+    pub username: String,
+    pub password: String,
+    pub email: String,
+    pub fullname: String,
+}
+
+/// Cheap to clone: each step runs on its own copy.
+#[derive(Clone)]
 pub struct LoginFlow {
     auth: AuthManager,
-    pending: Pending,
 }
 
 impl LoginFlow {
     pub fn new() -> Result<Self> {
         Ok(Self {
             auth: AuthManager::new()?,
-            pending: Pending::None,
         })
     }
 
-    pub async fn verify_server(&mut self, server: &str) -> LoginResult {
-        let server = normalize_server_url(server);
+    pub async fn verify_server(self, server: String) -> LoginResult {
+        let server = normalize_server_url(&server);
         if let Err(e) = self.auth.verify_pinepods_instance(&server).await {
             return LoginResult::Error(format!("Couldn't verify the server: {e:#}"));
         }
@@ -53,86 +83,67 @@ impl LoginFlow {
         }
     }
 
-    pub async fn create_first_admin(
-        &mut self,
-        server: &str,
-        username: String,
-        password: String,
-        email: String,
-        fullname: String,
-    ) -> LoginResult {
-        let server = normalize_server_url(server);
-        let request = match hash_password(&password) {
+    pub async fn create_first_admin(self, server: String, admin: NewAdmin) -> LoginResult {
+        let server = normalize_server_url(&server);
+        let request = match hash_password(&admin.password) {
             Ok(hashed) => CreateFirstAdminRequest {
-                username: username.clone(),
+                username: admin.username.clone(),
                 password: hashed,
-                email,
-                fullname,
+                email: admin.email,
+                fullname: admin.fullname,
             },
             Err(e) => return LoginResult::Error(e.to_string()),
         };
         if let Err(e) = self.auth.create_first_admin(&server, request).await {
             return LoginResult::Error(format!("{e:#}"));
         }
-        self.authenticate(&server, &username, &password).await
+        self.sign_in(server, admin.username, admin.password).await
     }
 
-    pub async fn authenticate(
-        &mut self,
-        server: &str,
-        username: &str,
-        password: &str,
-    ) -> LoginResult {
-        let server = normalize_server_url(server);
-        match self.auth.login(&server, username, password).await {
+    pub async fn sign_in(self, server: String, username: String, password: String) -> LoginResult {
+        let server = normalize_server_url(&server);
+        match self.auth.login(&server, &username, &password).await {
             Ok(LoginOutcome::Key(api_key)) => self.finish(server, api_key).await,
             Ok(LoginOutcome::MfaRequired {
                 mfa_session_token, ..
-            }) => {
-                self.pending = Pending::Mfa {
-                    server,
-                    mfa_session_token,
-                };
-                LoginResult::MfaRequired
-            }
-            Err(e) => LoginResult::Error(format!("Login failed: {e:#}")),
+            }) => LoginResult::MfaRequired(MfaSession {
+                server,
+                token: mfa_session_token,
+            }),
+            Err(e) => LoginResult::Error(format!("{e:#}")),
         }
     }
 
-    pub async fn verify_mfa(&mut self, code: &str) -> LoginResult {
-        let Pending::Mfa {
-            server,
-            mfa_session_token,
-        } = std::mem::replace(&mut self.pending, Pending::None)
-        else {
-            return LoginResult::Error("Log in again to get a new MFA prompt".into());
-        };
+    /// Signs in with a key made in the web app, for accounts that log in through
+    /// OIDC and so have no password.
+    pub async fn sign_in_with_key(self, server: String, api_key: String) -> LoginResult {
+        let server = normalize_server_url(&server);
+        self.finish(server, api_key.trim().to_string()).await
+    }
+
+    /// On failure the session comes back so the code can be typed again.
+    pub async fn verify_mfa(
+        self,
+        session: MfaSession,
+        code: String,
+    ) -> (LoginResult, Option<MfaSession>) {
         match self
             .auth
-            .verify_mfa(&server, mfa_session_token.clone(), code.to_string())
+            .verify_mfa(&session.server, session.token.clone(), code)
             .await
         {
-            Ok(api_key) => self.finish(server, api_key).await,
-            Err(e) => {
-                // Keep the MFA session so the user can retype the code.
-                self.pending = Pending::Mfa {
-                    server,
-                    mfa_session_token,
-                };
-                LoginResult::Error(format!("MFA failed: {e:#}"))
-            }
+            Ok(api_key) => (self.finish(session.server, api_key).await, None),
+            Err(e) => (LoginResult::Error(format!("{e:#}")), Some(session)),
         }
     }
 
     pub async fn setup_timezone(
-        &mut self,
+        self,
+        auth_state: AuthState,
         timezone: String,
         hour_pref: i32,
         date_format: String,
     ) -> LoginResult {
-        let Pending::Setup(auth_state) = &self.pending else {
-            return LoginResult::Error("Log in first".into());
-        };
         let info = TimeZoneInfo {
             user_id: auth_state.user_details.UserID,
             timezone,
@@ -146,15 +157,15 @@ impl LoginFlow {
         {
             return LoginResult::Error(format!("Couldn't save the settings: {e:#}"));
         }
-        let Pending::Setup(auth_state) = std::mem::replace(&mut self.pending, Pending::None) else {
-            unreachable!("checked above");
-        };
-        Self::complete(*auth_state)
+        Self::complete(auth_state)
     }
 
-    async fn finish(&mut self, server: String, api_key: String) -> LoginResult {
+    async fn finish(&self, server: String, api_key: String) -> LoginResult {
         let (user_details, server_details) = match self.auth.load_account(&server, &api_key).await {
             Ok(account) => account,
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => {
+                return LoginResult::Error("The server didn't accept that API key".into());
+            }
             Err(e) => return LoginResult::Error(format!("Couldn't load the account: {e:#}")),
         };
         let auth_state = AuthState {
@@ -176,8 +187,7 @@ impl LoginFlow {
                 true
             });
         if !setup_done {
-            self.pending = Pending::Setup(Box::new(auth_state));
-            return LoginResult::FirstTimeSetup;
+            return LoginResult::FirstTimeSetup(Box::new(auth_state));
         }
         Self::complete(auth_state)
     }
@@ -191,13 +201,13 @@ impl LoginFlow {
 
     /// Restores the saved session. A revoked key clears it; an unreachable server keeps
     /// it, so Firewood still starts when the server is down or the network is out.
-    pub async fn restore_session(&self) -> Option<SessionInfo> {
+    pub async fn restore_session(self) -> Restored {
         let auth_state = match SessionStorage::load_session() {
             Ok(Some(auth)) => auth,
-            Ok(None) => return None,
+            Ok(None) => return Restored::None,
             Err(e) => {
                 tracing::warn!("couldn't read the saved session: {e:#}");
-                return None;
+                return Restored::None;
             }
         };
         match self
@@ -206,22 +216,19 @@ impl LoginFlow {
             .await
         {
             Ok(()) => {}
-            Err(e)
-                if matches!(
-                    e.downcast_ref::<crate::api::ApiError>(),
-                    Some(crate::api::ApiError::Unauthorized)
-                ) =>
-            {
+            Err(e) if matches!(e.downcast_ref::<ApiError>(), Some(ApiError::Unauthorized)) => {
                 tracing::warn!("the saved API key was rejected; logging out");
                 if let Err(e) = SessionStorage::clear_session() {
                     tracing::warn!("couldn't clear the session: {e:#}");
                 }
-                return None;
+                return Restored::Rejected {
+                    server: auth_state.server_name,
+                };
             }
             Err(e) => tracing::warn!(
                 "couldn't reach the server to check the session; continuing offline: {e:#}"
             ),
         }
-        Some(SessionInfo { auth_state })
+        Restored::Session(Box::new(SessionInfo { auth_state }))
     }
 }

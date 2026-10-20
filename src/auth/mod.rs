@@ -5,7 +5,7 @@ pub mod session_storage;
 pub mod tui_login;
 
 pub use auth_manager::AuthManager;
-pub use login_flow::{LoginFlow, LoginResult};
+pub use login_flow::{LoginFlow, LoginResult, Restored};
 pub use models::*;
 pub use session_storage::SessionStorage;
-pub use tui_login::{LoginTab, LoginTui};
+pub use tui_login::LoginTui;

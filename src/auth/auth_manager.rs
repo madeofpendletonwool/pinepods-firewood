@@ -10,6 +10,7 @@ use super::models::*;
 use crate::api::ApiError;
 use crate::api::http::build_client;
 
+#[derive(Clone)]
 pub struct AuthManager {
     client: Client,
 }

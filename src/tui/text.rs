@@ -26,6 +26,26 @@ pub fn truncate(text: &str, max_width: usize) -> String {
     out
 }
 
+/// Breaks `text` into lines at most `width` columns wide, between words where it
+/// can. A word longer than a line is cut with [`truncate`].
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        if !line.is_empty() && line.width() + 1 + word.width() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(&truncate(word, width));
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -52,5 +72,15 @@ mod tests {
     #[test]
     fn zero_width_gives_empty() {
         assert_eq!(truncate("anything", 0), "");
+    }
+
+    #[test]
+    fn wraps_between_words() {
+        assert_eq!(
+            wrap("the quick brown fox jumps", 10),
+            ["the quick", "brown fox", "jumps"]
+        );
+        assert_eq!(wrap("  ", 10), Vec::<String>::new());
+        assert_eq!(wrap("abcdefghijkl", 5), ["abcd…"]);
     }
 }
