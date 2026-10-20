@@ -46,3 +46,15 @@ libc = "0.2.174"
 
 [dev-dependencies]
 wiremock = "0.6.5"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6.2"
+dispatch2 = "0.3.1"
+objc2 = "0.6.5"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSImage"] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFRunLoop", "CFCGTypes"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSString", "NSValue", "NSGeometry"] }
+objc2-media-player = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-app-kit", "objc2-core-foundation", "MPMediaItem", "MPNowPlayingInfoCenter", "MPRemoteCommand", "MPRemoteCommandCenter", "MPRemoteCommandEvent"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = "0.10.0"

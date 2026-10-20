@@ -18,6 +18,7 @@ use pinepods_firewood::api::http::{build_client, build_media_client};
 use pinepods_firewood::api::{HttpApi, PinepodsApi};
 use pinepods_firewood::art::Artwork;
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
+use pinepods_firewood::mediakeys;
 use pinepods_firewood::nowplaying::{self, NowPlaying};
 use pinepods_firewood::paths;
 use pinepods_firewood::playback::{Playback, PlaybackConfig};
@@ -51,8 +52,18 @@ fn setup_logging() -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // On macOS the media keys need the main thread, so Firewood runs on another.
+    mediakeys::run_with_main_loop(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("couldn't start the async runtime")?
+            .block_on(app_main())
+    })
+}
+
+async fn app_main() -> Result<()> {
     let _log_guard = setup_logging()?;
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
 
@@ -124,6 +135,16 @@ async fn run(terminal: &mut DefaultTerminal, picker: Picker) -> Result<()> {
         },
     )
     .context("couldn't start audio")?;
+    let artwork = Artwork::new(build_client()?, &auth.server_name);
+    if settings.media_keys() {
+        mediakeys::start(
+            playback.clone(),
+            mediakeys::Config {
+                skip: Duration::from_secs(settings.skip_interval()),
+                artwork: Some(artwork.clone()),
+            },
+        );
+    }
     let remote = NowPlaying::start(
         nowplaying::Config {
             server: auth.server_name.clone(),
@@ -135,7 +156,7 @@ async fn run(terminal: &mut DefaultTerminal, picker: Picker) -> Result<()> {
         playback.clone(),
     );
 
-    let covers = Covers::new(Artwork::new(build_client()?, &auth.server_name), picker);
+    let covers = Covers::new(artwork, picker);
     let app = App::new(
         &session,
         api,

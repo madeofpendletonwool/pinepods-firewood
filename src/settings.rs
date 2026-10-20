@@ -17,6 +17,8 @@ pub struct AppSettings {
     /// UI settings
     pub ui: UiSettings,
     pub remote: RemoteSettings,
+    /// Media keys and the system's now-playing controls (MPRIS, Control Center).
+    pub media_keys: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,7 @@ impl Default for AppSettings {
             audio: AudioSettings::default(),
             ui: UiSettings::default(),
             remote: RemoteSettings::default(),
+            media_keys: true,
         }
     }
 }
@@ -196,6 +199,10 @@ impl SettingsManager {
 
     pub fn theme_name(&self) -> &str {
         &self.settings.theme.theme_name
+    }
+
+    pub fn media_keys(&self) -> bool {
+        self.settings.media_keys
     }
 
     pub fn cover_art(&self) -> bool {

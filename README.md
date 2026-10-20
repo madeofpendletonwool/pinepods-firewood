@@ -28,6 +28,7 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Chapters and transcripts**: Now Playing lists an episode's chapters and follows along in its transcript; Enter jumps to a chapter or line
 - **Progress Tracking**: Resumes where you left off and saves your position to the server while you listen
 - **Reconnects**: Rides out short network drops and picks up where you were
+- **Media keys**: the keyboard's play/pause and next/previous keys work, and what's playing shows in Control Center on macOS and in the desktop's media controls on Linux (MPRIS, so `playerctl` works too). Next and previous skip by the skip length
 - **Formats**: MP3, AAC/M4A, FLAC, Ogg Vorbis and WAV
 
 ## 🚀 Installation
@@ -133,7 +134,7 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 - **Downloads**: the episodes your server has a copy of, by podcast
 - **Search**: episodes from the podcasts you follow, as you type. **f** switches to finding new podcasts on Podcast Index, iTunes or YouTube: type a name, press **Enter**, then **s** subscribes (or **Enter** shows more about one first)
 - **Devices**: your other players (see [Remote Control](#-remote-control))
-- **Settings**: theme, cover art, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
+- **Settings**: theme, cover art, media keys, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
 
 ### Themes
 Firewood starts with the theme you picked in the PinePods web app, so a change there
@@ -181,6 +182,7 @@ src/
 ├── art/           # Cover art: fetching, caching, decoding
 ├── audio/         # Audio output thread
 ├── auth/          # Login flow and saved session
+├── mediakeys/     # Media keys: MPRIS on Linux, Now Playing on macOS
 ├── nowplaying/    # Remote control over the server's now-playing socket
 ├── playback/      # Playback core and progress sync
 ├── theme/         # The web app's themes, adapted for a terminal
@@ -234,6 +236,17 @@ beam episodes to Firewood like to any other device, and it accepts their command
   than the now-playing release, or a reverse proxy in front of it doesn't pass
   WebSocket upgrades on `/ws/api/` through.
 
+## ⏯️ Media Keys
+
+Firewood shows what's playing to the system and takes its play, pause, skip and seek
+commands: through MPRIS on Linux (the desktop's media widget, `playerctl`, most
+desktops' media keys) and through Now Playing on macOS (Control Center, the lock
+screen, the keyboard's media keys). It works the same whatever the terminal.
+
+- Next and previous skip forward and back by the skip length.
+- Turn it off in Settings, or for one run with `FIREWOOD_MEDIA_KEYS=0`.
+- On Linux it needs a D-Bus session; without one Firewood logs a warning and carries on.
+
 ## 🐛 Troubleshooting
 
 ### Common Issues
@@ -268,7 +281,7 @@ This project is licensed under the GNU General Public License v3.0; see the [LIC
 - [x] Podcast discovery and subscribing
 - [x] A command palette
 - [x] Cover art in terminals that can show images
-- [ ] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
+- [x] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
 - [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on
 
 ---
