@@ -92,9 +92,11 @@ sudo cp target/release/pinepods_firewood /usr/local/bin/
 
 ### First Launch
 1. **Server Setup**: Enter your PinePods server URL
-2. **Authentication**: Login with your PinePods credentials
+2. **Authentication**: Sign in with your PinePods username and password. If you sign in through OIDC, press **F2** and paste an API key from the web app (Settings → API Keys) instead
 3. **Multi-Factor**: Complete MFA if enabled
-4. **Timezone**: Select your timezone for episode timestamps
+4. **Timezone**: Pick your time zone (type to search) and how dates and times look; a new account asks once
+
+Every key you type goes into the fields, so **Ctrl+C** quits the login screen. **F1** shows the password as you type it.
 
 ### Getting around
 - **1–9, 0** jump to a sidebar entry (in the order shown; change it in Settings). **Tab** / **Shift+Tab** step through them

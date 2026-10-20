@@ -135,30 +135,30 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
     result
 }
 
-/// Returns `None` if the user quits from the login screen.
+/// Returns `None` if the user quits from the login screen. Requests run in the
+/// background, so this draws on time while the server is slow to answer.
 async fn authenticate(terminal: &mut DefaultTerminal) -> Result<Option<SessionInfo>> {
+    const FRAME: Duration = Duration::from_millis(50);
     let mut login = LoginTui::new()?;
-    if let Some(session) = login.check_existing_auth().await {
-        return Ok(Some(session));
-    }
-
     loop {
-        terminal.draw(|f| login.render(f, f.area()))?;
-        if !event::poll(Duration::from_millis(100))? {
-            continue;
-        }
-        let Event::Key(key) = event::read()? else {
-            continue;
-        };
-        if key.kind != KeyEventKind::Press {
-            continue;
-        }
-        // Every printable key belongs to the input fields, so quitting is Ctrl+C only.
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            return Ok(None);
-        }
-        if let Some(session) = login.handle_input(key).await? {
+        if let Some(session) = login.tick() {
             return Ok(Some(session));
+        }
+        terminal.draw(|f| login.render(f))?;
+        if !tokio::task::block_in_place(|| event::poll(FRAME))? {
+            continue;
+        }
+        match event::read()? {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                // Every printable key belongs to the input fields, so quitting is
+                // Ctrl+C only.
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+                    return Ok(None);
+                }
+                login.key(key);
+            }
+            Event::Paste(text) => login.paste(&text),
+            _ => {}
         }
     }
 }
