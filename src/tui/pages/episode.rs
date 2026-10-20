@@ -139,7 +139,8 @@ impl Page for EpisodePage {
     }
 
     fn mouse(&mut self, event: MouseEvent, cx: &mut Ctx) -> Outcome {
-        match self.details.mouse(event) {
+        let position = self.position(cx);
+        match self.details.mouse(event, position, cx) {
             details::Outcome::Seek(start) => {
                 self.play_from(start, cx);
                 Outcome::Handled

@@ -183,9 +183,10 @@ impl Page for PlayerPage {
 
     fn mouse(&mut self, event: MouseEvent, cx: &mut Ctx) -> Outcome {
         let at = Position::new(event.column, event.row);
+        let position = cx.player.current_position.as_secs_f64();
         match event.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-                self.details.mouse(event);
+                self.details.mouse(event, Some(position), cx);
             }
             MouseEventKind::Down(MouseButton::Left) if self.progress_area.contains(at) => {
                 let total = cx.player.total_duration;
@@ -205,7 +206,7 @@ impl Page for PlayerPage {
                 } else if self.buttons[2].contains(at) {
                     cx.playback.skip_forward(skip)
                 } else {
-                    return match self.details.mouse(event) {
+                    return match self.details.mouse(event, Some(position), cx) {
                         details::Outcome::Seek(start) => {
                             let _ = cx.playback.seek(Duration::from_secs_f64(start));
                             Outcome::Handled

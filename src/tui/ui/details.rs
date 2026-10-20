@@ -83,6 +83,8 @@ pub struct Details {
     cues: CueView,
     /// An untimed transcript, laid out like notes.
     transcript_notes: NotesView,
+    /// Where each tab was drawn, for clicks.
+    tab_areas: Vec<(Rect, View)>,
 }
 
 impl Details {
@@ -171,9 +173,13 @@ impl Details {
             return false;
         }
         let i = views.iter().position(|v| *v == self.view()).unwrap_or(0);
-        let next = views[(i + 1) % views.len()];
-        self.view = Some(next);
-        match next {
+        self.open(views[(i + 1) % views.len()], position, cx);
+        true
+    }
+
+    fn open(&mut self, view: View, position: Option<f64>, cx: &Ctx) {
+        self.view = Some(view);
+        match view {
             View::Chapters => {
                 if let Some(i) = position.and_then(|p| self.current_chapter(p)) {
                     self.chapters.select_index(i);
@@ -182,7 +188,6 @@ impl Details {
             View::Transcript => self.load_transcript(cx),
             View::Notes => {}
         }
-        true
     }
 
     fn load_transcript(&mut self, cx: &Ctx) {
@@ -275,7 +280,20 @@ impl Details {
         }
     }
 
-    pub fn mouse(&mut self, event: MouseEvent) -> Outcome {
+    /// `position` is where playback is, when this episode is the one playing.
+    pub fn mouse(&mut self, event: MouseEvent, position: Option<f64>, cx: &Ctx) -> Outcome {
+        if let MouseEventKind::Down(MouseButton::Left) = event.kind {
+            let at = ratatui::layout::Position::new(event.column, event.row);
+            let tab = self
+                .tab_areas
+                .iter()
+                .find(|(area, _)| area.contains(at))
+                .map(|(_, view)| *view);
+            if let Some(view) = tab {
+                self.open(view, position, cx);
+                return Outcome::Handled;
+            }
+        }
         match self.view() {
             View::Notes if self.notes.mouse(event) => Outcome::Handled,
             View::Chapters => match self.chapters.mouse(event) {
@@ -304,6 +322,7 @@ impl Details {
         base: Style,
     ) {
         let views = self.views();
+        self.tab_areas.clear();
         let area = if views.len() > 1 || self.extras.is_loading() {
             let [tabs, _, rest] = Layout::vertical([
                 Constraint::Length(1),
@@ -338,9 +357,10 @@ impl Details {
         }
     }
 
-    fn render_tabs(&self, frame: &mut Frame, area: Rect, views: &[View], theme: &Theme) {
+    fn render_tabs(&mut self, frame: &mut Frame, area: Rect, views: &[View], theme: &Theme) {
         let current = self.view();
         let mut spans = Vec::new();
+        let mut x = area.x;
         for view in views {
             let style = if *view == current {
                 theme.active
@@ -351,6 +371,16 @@ impl Details {
                 View::Chapters => format!(" {} {} ", view.title(), self.chapters_list().len()),
                 _ => format!(" {} ", view.title()),
             };
+            let width = label.chars().count() as u16;
+            self.tab_areas.push((
+                Rect {
+                    x,
+                    width: width.min(area.right().saturating_sub(x)),
+                    ..area
+                },
+                *view,
+            ));
+            x = x.saturating_add(width + 1);
             spans.push(Span::styled(label, style));
             spans.push(Span::raw(" "));
         }
