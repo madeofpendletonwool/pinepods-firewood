@@ -121,6 +121,21 @@ impl LoginFlow {
         self.finish(server, api_key.trim().to_string()).await
     }
 
+    /// Loads the account behind a key given from outside (headless mode's environment)
+    /// without saving it as the session or running first-run setup: the key's owner
+    /// stays in charge of where it lives, and there's nobody to ask setup questions.
+    pub async fn account_for_key(self, server: String, api_key: String) -> Result<AuthState> {
+        let server = normalize_server_url(&server);
+        let api_key = api_key.trim().to_string();
+        let (user_details, server_details) = self.auth.load_account(&server, &api_key).await?;
+        Ok(AuthState {
+            server_name: server,
+            api_key,
+            user_details,
+            server_details,
+        })
+    }
+
     /// On failure the session comes back so the code can be typed again.
     pub async fn verify_mfa(
         self,

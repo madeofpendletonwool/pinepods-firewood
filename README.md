@@ -182,9 +182,12 @@ src/
 ├── art/           # Cover art: fetching, caching, decoding
 ├── audio/         # Audio output thread
 ├── auth/          # Login flow and saved session
+├── cli.rs         # Command-line arguments
+├── headless.rs    # --headless: player and remote control without the TUI
 ├── mediakeys/     # Media keys: MPRIS on Linux, Now Playing on macOS
 ├── nowplaying/    # Remote control over the server's now-playing socket
 ├── playback/      # Playback core and progress sync
+├── services.rs    # What a logged-in Firewood runs, with or without the TUI
 ├── theme/         # The web app's themes, adapted for a terminal
 └── tui/           # Terminal user interface
     ├── app.rs     # Sidebar, now-playing bar, overlays, input routing
@@ -236,6 +239,32 @@ beam episodes to Firewood like to any other device, and it accepts their command
   than the now-playing release, or a reverse proxy in front of it doesn't pass
   WebSocket upgrades on `/ws/api/` through.
 
+## 🔈 Headless Mode
+
+`pinepods_firewood --headless` runs the player and remote control without the TUI, so
+a Raspberry Pi, a speaker box or a spare Mac can sit there as a device your other
+PinePods apps play on. It shows up in their device lists like any other player: beam
+an episode to it, control it, or take what it's playing back with "Play here".
+Progress syncs as usual, and when an episode ends the next one in your queue plays.
+
+It logs in with the session saved by running `pinepods_firewood` once in a terminal,
+or with these, which win over a saved session:
+
+- `FIREWOOD_SERVER`: the server's URL.
+- `FIREWOOD_API_KEY`, or `FIREWOOD_API_KEY_FILE` naming a file that holds it. Make a
+  key in the web app under Settings → API Keys.
+
+Firewood keeps retrying until the network and the server are up, so it can start
+before either. A key the server rejects stops it. Logs go to stderr as well as the log
+file, and SIGTERM, SIGINT or SIGHUP saves the position and exits. Volume, audio
+device and the device name come from `settings.json`, the same as the TUI.
+
+To start it at boot or login, there's a systemd user unit in
+[`pkg/systemd/`](pkg/systemd/firewood.service) and a launchd agent in
+[`pkg/launchd/`](pkg/launchd/online.pinepods.firewood.plist); each file says how to
+install it. On a desktop whose keyring a service can't unlock, give the service a key
+file rather than relying on the saved session.
+
 ## ⏯️ Media Keys
 
 Firewood shows what's playing to the system and takes its play, pause, skip and seek
@@ -282,7 +311,7 @@ This project is licensed under the GNU General Public License v3.0; see the [LIC
 - [x] A command palette
 - [x] Cover art in terminals that can show images
 - [x] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
-- [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on
+- [x] Headless mode, for a Raspberry Pi or speaker box that other devices play on
 
 ---
 

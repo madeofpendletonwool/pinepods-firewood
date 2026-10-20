@@ -1,3 +1,4 @@
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -13,16 +14,17 @@ use ratatui::crossterm::terminal::{Clear, ClearType};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
-use pinepods_firewood::api::http::{build_client, build_media_client};
-use pinepods_firewood::api::{HttpApi, PinepodsApi};
-use pinepods_firewood::art::Artwork;
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
+use pinepods_firewood::cli::{self, Command, Mode};
+use pinepods_firewood::headless;
 use pinepods_firewood::mediakeys;
-use pinepods_firewood::nowplaying::{self, NowPlaying};
+use pinepods_firewood::nowplaying::NowPlaying;
 use pinepods_firewood::paths;
-use pinepods_firewood::playback::{Playback, PlaybackConfig};
-use pinepods_firewood::settings::SettingsManager;
+use pinepods_firewood::playback::Playback;
+use pinepods_firewood::services::Services;
 use pinepods_firewood::stderr::StderrRedirect;
 use pinepods_firewood::tui::App;
 use pinepods_firewood::tui::ui::cover::{self, Covers};
@@ -33,39 +35,98 @@ const LOG_FILES_KEPT: usize = 7;
 /// Logs go to a daily file. `FIREWOOD_LOG` takes an `EnvFilter` directive
 /// (`debug`, `pinepods_firewood=trace`, …); the default is `info`, minus the MP3
 /// decoder's warnings about resyncing, which every seek into an MP3 stream produces.
-fn setup_logging() -> Result<WorkerGuard> {
-    let appender = RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix("firewood")
-        .filename_suffix("log")
-        .max_log_files(LOG_FILES_KEPT)
-        .build(paths::log_dir()?)
-        .context("couldn't open the log file")?;
-    let (writer, guard) = tracing_appender::non_blocking(appender);
+/// Headless, they go to stderr too, where a service manager's journal picks them up,
+/// and a log file that can't be opened leaves just stderr.
+fn setup_logging(mode: Mode) -> Result<Option<WorkerGuard>> {
+    let headless = mode == Mode::Headless;
+    let appender = paths::log_dir()
+        .map_err(anyhow::Error::from)
+        .and_then(|dir| {
+            RollingFileAppender::builder()
+                .rotation(Rotation::DAILY)
+                .filename_prefix("firewood")
+                .filename_suffix("log")
+                .max_log_files(LOG_FILES_KEPT)
+                .build(dir)
+                .map_err(anyhow::Error::from)
+        })
+        .context("couldn't open the log file");
+    let (file, guard, file_error) = match appender {
+        Ok(appender) => {
+            let (writer, guard) = tracing_appender::non_blocking(appender);
+            let layer = tracing_subscriber::fmt::layer()
+                .with_writer(writer)
+                .with_ansi(false);
+            (Some(layer), Some(guard), None)
+        }
+        Err(err) if headless => (None, None, Some(err)),
+        Err(err) => return Err(err),
+    };
     let filter = EnvFilter::try_from_env("FIREWOOD_LOG")
         .unwrap_or_else(|_| EnvFilter::new("info,symphonia_bundle_mp3=error"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_writer(writer)
-        .with_ansi(false)
+    let stderr = headless.then(|| {
+        tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .with_ansi(false)
+    });
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(file)
+        .with(stderr)
         .init();
+    if let Some(err) = file_error {
+        tracing::warn!("logging to stderr only: {err:#}");
+    }
     Ok(guard)
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
+    let mode = match cli::parse(std::env::args_os().skip(1)) {
+        Ok(Command::Run(mode)) => mode,
+        Ok(Command::Version) => {
+            println!("pinepods_firewood {}", env!("CARGO_PKG_VERSION"));
+            return Ok(ExitCode::SUCCESS);
+        }
+        Ok(Command::Help) => {
+            print!("{}", cli::USAGE);
+            return Ok(ExitCode::SUCCESS);
+        }
+        Err(err) => {
+            eprint!("{err}\n\n{}", cli::USAGE);
+            return Ok(ExitCode::from(2));
+        }
+    };
     // On macOS the media keys need the main thread, so Firewood runs on another.
-    mediakeys::run_with_main_loop(|| {
+    let result = mediakeys::run_with_main_loop(move || {
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .context("couldn't start the async runtime")?
-            .block_on(app_main())
-    })
+            .block_on(app_main(mode))
+    });
+    match result {
+        // Headless logs go to stderr, so the error is there already.
+        Err(_) if mode == Mode::Headless => Ok(ExitCode::FAILURE),
+        result => result.map(|()| ExitCode::SUCCESS),
+    }
 }
 
-async fn app_main() -> Result<()> {
-    let _log_guard = setup_logging()?;
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting");
+async fn app_main(mode: Mode) -> Result<()> {
+    let _log_guard = setup_logging(mode)?;
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), ?mode, "starting");
+
+    if mode == Mode::Headless {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            tracing::error!("panic: {info}");
+            default_hook(info);
+        }));
+        let result = headless::run().await;
+        if let Err(err) = &result {
+            tracing::error!("exiting with error: {err:#}");
+        }
+        return result;
+    }
 
     let log_dir = paths::log_dir()?;
     let crash_note = format!("Firewood crashed. Details are in {}", log_dir.display());
@@ -114,47 +175,13 @@ async fn run(terminal: &mut DefaultTerminal, picker: Picker) -> Result<()> {
         return Ok(());
     };
 
-    let auth = &session.auth_state;
-    let api: Arc<dyn PinepodsApi> = Arc::new(HttpApi::new(
-        build_client()?,
-        &auth.server_name,
-        auth.api_key.clone(),
-        i64::from(auth.user_details.UserID),
-    ));
-
-    let settings = SettingsManager::new().unwrap_or_else(|e| {
-        tracing::warn!("couldn't load settings, using defaults: {e:#}");
-        SettingsManager::with_defaults()
-    });
-    let playback = Playback::start(
-        api.clone(),
-        build_media_client()?,
-        PlaybackConfig {
-            device: settings.selected_audio_device(),
-            volume: settings.default_volume(),
-        },
-    )
-    .context("couldn't start audio")?;
-    let artwork = Artwork::new(build_client()?, &auth.server_name);
-    if settings.media_keys() {
-        mediakeys::start(
-            playback.clone(),
-            mediakeys::Config {
-                skip: Duration::from_secs(settings.skip_interval()),
-                artwork: Some(artwork.clone()),
-            },
-        );
-    }
-    let remote = NowPlaying::start(
-        nowplaying::Config {
-            server: auth.server_name.clone(),
-            api_key: auth.api_key.clone(),
-            user_id: i64::from(auth.user_details.UserID),
-            device_name: settings.device_name(),
-        },
-        api.clone(),
-        playback.clone(),
-    );
+    let Services {
+        api,
+        playback,
+        remote,
+        artwork,
+        settings,
+    } = Services::start(&session.auth_state)?;
 
     let covers = Covers::new(artwork, picker);
     let app = App::new(

@@ -250,7 +250,7 @@ impl NowPlaying {
     }
 }
 
-fn disabled_by_env() -> bool {
+pub fn disabled_by_env() -> bool {
     std::env::var(DISABLE_ENV).is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
 }
 

@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Firewood as an always-on player that other PinePods devices play on, as a launchd
+  agent that starts when you log in:
+
+    cp online.pinepods.firewood.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/online.pinepods.firewood.plist
+
+  Stop it with `launchctl bootout gui/$(id -u)/online.pinepods.firewood`. Logs are in
+  ~/Library/Application Support/pinepods-firewood/logs.
+
+  It uses the session saved by running pinepods_firewood once in a terminal. To give it
+  a key instead, uncomment EnvironmentVariables. launchd doesn't expand ~, so write
+  full paths.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>online.pinepods.firewood</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/pinepods_firewood</string>
+        <string>--headless</string>
+    </array>
+    <!--
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>FIREWOOD_SERVER</key>
+        <string>https://pinepods.example.com</string>
+        <key>FIREWOOD_API_KEY_FILE</key>
+        <string>/Users/you/.config/pinepods-firewood/api_key</string>
+    </dict>
+    -->
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Restart after a crash, but not after a clean stop. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

@@ -1,0 +1,34 @@
+# Firewood as an always-on player that other PinePods devices play on, as a systemd
+# user service:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp firewood.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now firewood
+#   loginctl enable-linger "$USER"    # start at boot, without anyone logging in
+#
+# Logs: journalctl --user -u firewood
+#
+# It's a user service, not a system one, so it plays through the same sound server
+# (PipeWire, PulseAudio) as the rest of the user's session and finds their config.
+# Firewood retries until the network and the server are up, so it needs no ordering
+# on the network.
+
+[Unit]
+Description=PinePods Firewood (headless player)
+After=sound.target
+
+[Service]
+ExecStart=/usr/local/bin/pinepods_firewood --headless
+# Leave these out to use the session saved by running pinepods_firewood once in a
+# terminal. Set them where that session's key is in a desktop keyring a service can't
+# unlock. Make the key in the web app under Settings → API Keys, and keep it in a
+# file only this user can read (chmod 600) rather than in this file.
+#Environment=FIREWOOD_SERVER=https://pinepods.example.com
+#Environment=FIREWOOD_API_KEY_FILE=%h/.config/pinepods-firewood/api_key
+#Environment=FIREWOOD_LOG=info
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
