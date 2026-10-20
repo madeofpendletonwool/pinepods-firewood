@@ -22,7 +22,10 @@ use unicode_width::UnicodeWidthStr;
 use super::collection_picker::CollectionPicker;
 use super::device_picker::DevicePicker;
 use super::keymap::{Action, Context, Keymap};
+use super::pages::episodes::EpisodeListPage;
+use super::pages::search::{RecentSearch, SearchPage};
 use super::pages::{Ctx, Outcome, Page, Section};
+use super::palette::{self, Command, Palette};
 use super::task::{Bus, Event, Pending, Resource, Toast, ToastKind};
 use super::text::truncate;
 use super::ui::{self, list::Click};
@@ -45,6 +48,7 @@ const SPEED_STEP: f32 = 0.1;
 /// How long a volume or speed change shows in the now-playing bar.
 const FLASH_FOR: Duration = Duration::from_millis(1500);
 const MAX_TOASTS: usize = 4;
+const MAX_RECENT_SEARCHES: usize = 8;
 
 pub struct App {
     api: Api,
@@ -77,6 +81,9 @@ pub struct App {
     help: Option<u16>,
     picker: Option<DevicePicker>,
     collections: Option<CollectionPicker>,
+    palette: Option<Palette>,
+    /// Newest first.
+    searches: Vec<RecentSearch>,
     /// The last remote-control notice already shown, so each shows once.
     notice_seen: Option<Instant>,
     quit: bool,
@@ -149,6 +156,8 @@ impl App {
             help: None,
             picker: None,
             collections: None,
+            palette: None,
+            searches: Vec::new(),
             notice_seen: None,
             quit: false,
             sidebar_rows: Vec::new(),
@@ -223,6 +232,12 @@ impl App {
                         page.changed(resource);
                     }
                 }
+                Event::Searched(search) => {
+                    self.searches
+                        .retain(|s| *s != search && !s.leads_to(&search));
+                    self.searches.insert(0, search);
+                    self.searches.truncate(MAX_RECENT_SEARCHES);
+                }
             }
         }
         let now = Instant::now();
@@ -238,6 +253,9 @@ impl App {
 
         if let Some(picker) = &mut self.collections {
             picker.tick(&self.bus);
+        }
+        if let Some(palette) = &mut self.palette {
+            palette.tick(&self.bus);
         }
         self.show_remote_notice();
         self.apply_server_theme();
@@ -413,6 +431,11 @@ impl App {
             self.collections_key(key);
             return;
         }
+        if let Some(palette) = &mut self.palette {
+            let outcome = palette.key(key);
+            self.palette_outcome(outcome);
+            return;
+        }
 
         if let Some(outcome) = self.with_page(|page, cx| page.key(key, cx)) {
             self.apply_outcome(outcome);
@@ -423,14 +446,8 @@ impl App {
         }
 
         let contexts = self.page().contexts();
-        let action = self.keymap.action(key.into(), contexts);
-        if let Some(action) = action {
-            let outcome = self.with_page(|page, cx| page.action(action, cx));
-            if !matches!(outcome, Outcome::Ignored) {
-                self.apply_outcome(outcome);
-                return;
-            }
-            self.global(action);
+        if let Some(action) = self.keymap.action(key.into(), contexts) {
+            self.run_action(action);
             return;
         }
         // Digits go to sidebar entries in the order shown; 0 is the tenth.
@@ -444,8 +461,22 @@ impl App {
         }
     }
 
+    /// What a key bound to `action` does: the page's meaning first, then the global one.
+    fn run_action(&mut self, action: Action) {
+        let outcome = self.with_page(|page, cx| page.action(action, cx));
+        if matches!(outcome, Outcome::Ignored) {
+            self.global(action);
+        } else {
+            self.apply_outcome(outcome);
+        }
+    }
+
     /// Text pasted into the terminal goes to whatever field has focus.
     pub fn paste(&mut self, text: &str) {
+        if let Some(palette) = &mut self.palette {
+            palette.paste(text);
+            return;
+        }
         if !self.page().typing() {
             return;
         }
@@ -491,6 +522,10 @@ impl App {
             }
             Action::PlayOn => {
                 self.open_picker();
+                Ok(())
+            }
+            Action::Palette => {
+                self.open_palette();
                 Ok(())
             }
             Action::AddToCollection => {
@@ -553,6 +588,73 @@ impl App {
             (_, Some(Action::Top)) => Some(0),
             _ => Some(scroll),
         };
+    }
+
+    fn open_palette(&mut self) {
+        // The open page's episodes come first, then the rest of what's loaded.
+        let current = Section::ALL
+            .iter()
+            .position(|s| *s == self.current)
+            .unwrap_or(0);
+        let mut stacks: Vec<&Vec<Box<dyn Page>>> = vec![&self.stacks[current]];
+        stacks.extend(
+            self.stacks
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != current)
+                .map(|(_, stack)| stack),
+        );
+        let pages = || stacks.iter().flat_map(|stack| stack.iter().rev());
+        let entries = palette::entries(
+            &self.keymap,
+            palette::Sources {
+                contexts: self.page().contexts(),
+                sections: &self.order,
+                searches: &self.searches,
+                podcasts: pages().flat_map(|p| p.podcasts()).collect(),
+                episodes: pages().flat_map(|p| p.episodes()).collect(),
+            },
+        );
+        // Home's top podcasts are only a few; the Podcasts page or Search has them all.
+        let have_podcasts = [Section::Podcasts, Section::Search]
+            .iter()
+            .any(|s| !self.stack(*s)[0].podcasts().is_empty());
+        let api = (!have_podcasts).then_some(&self.api);
+        self.palette = Some(Palette::new(entries, api));
+    }
+
+    fn palette_outcome(&mut self, outcome: palette::Outcome) {
+        match outcome {
+            palette::Outcome::Open => {}
+            palette::Outcome::Close => self.palette = None,
+            palette::Outcome::Run(command) => {
+                self.palette = None;
+                self.run_command(*command);
+            }
+        }
+    }
+
+    fn run_command(&mut self, command: Command) {
+        match command {
+            Command::Action(action) => self.run_action(action),
+            Command::Go(section) => self.switch_to(section),
+            Command::Search(search) => {
+                *self.stack_mut(Section::Search) = vec![Box::new(SearchPage::repeat(&search))];
+                if self.current == Section::Search {
+                    self.with_page(|page, cx| page.show(cx));
+                } else {
+                    self.switch_to(Section::Search);
+                }
+            }
+            Command::Podcast(podcast) => {
+                self.stack_mut(Section::Podcasts).truncate(1);
+                self.switch_to(Section::Podcasts);
+                self.apply_outcome(Outcome::Push(Box::new(EpisodeListPage::podcast(podcast))));
+            }
+            Command::Play(episode) => {
+                self.with_page(|_, cx| ui::episodes::play(&episode, cx));
+            }
+        }
     }
 
     fn open_picker(&mut self) {
@@ -642,6 +744,11 @@ impl App {
             }
             return;
         }
+        if let Some(palette) = &mut self.palette {
+            let outcome = palette.mouse(event, click);
+            self.palette_outcome(outcome);
+            return;
+        }
         if click {
             if let Some(&(_, section)) = self.sidebar_rows.iter().find(|(r, _)| r.contains(at)) {
                 self.switch_to(section);
@@ -719,6 +826,9 @@ impl App {
         }
         if let Some(picker) = &mut self.collections {
             picker.render(frame, area, &self.theme);
+        }
+        if let Some(palette) = &mut self.palette {
+            palette.render(frame, area, &self.theme);
         }
         if self.help.is_some() {
             self.render_help(frame, area);

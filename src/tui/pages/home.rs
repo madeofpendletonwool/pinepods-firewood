@@ -15,7 +15,7 @@ use ratatui::{
 use super::episode::EpisodePage;
 use super::episodes::EpisodeListPage;
 use super::{Ctx, Outcome, Page};
-use crate::api::{Episode, HomeOverview};
+use crate::api::{Episode, HomeOverview, Podcast};
 use crate::tui::keymap::{Action, Context};
 use crate::tui::task::{Remote, Resource};
 use crate::tui::text::truncate;
@@ -337,5 +337,23 @@ impl Page for HomePage {
         let part = Part::ALL[self.focus];
         let index = self.lists[self.focus].selected_index()?;
         self.part_episodes(part).get(index).cloned()
+    }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        let Some(home) = &self.data.data else {
+            return Vec::new();
+        };
+        home.in_progress_episodes
+            .iter()
+            .chain(&home.recent_episodes)
+            .collect()
+    }
+
+    fn podcasts(&self) -> Vec<&Podcast> {
+        self.data
+            .data
+            .iter()
+            .flat_map(|home| &home.top_podcasts)
+            .collect()
     }
 }

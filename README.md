@@ -11,6 +11,7 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Pages**: Home, Feed, Podcasts, Queue, Saved (with your collections), Playlists, History, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes, chapters and transcripts
 - **Find and follow podcasts**: search Podcast Index, iTunes and YouTube and subscribe from the terminal
 - **Filter as you type**: `/` narrows any list; Search queries your server as you type
+- **Command palette**: `:` or Ctrl+P finds any command, page, podcast or loaded episode by a few letters of its name
 - **Themes**: the same 25 themes as the PinePods web app, starting with the one you picked there, or your terminal's own colors
 - **Keys you can change**: vim-style and arrow keys by default, `?` lists them, `keymap.toml` rebinds them
 - **Mouse**: click to select, click again to play or open, scroll lists, click the progress bar to seek
@@ -105,6 +106,7 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 - **j/k** or **↑/↓** move, **g/G** first/last, **Ctrl+D/U** page down/up
 - **Enter** plays an episode or opens a podcast. **i** (or **l**) opens an episode's details and show notes. **Esc** goes back
 - **/** filters the list you're on; **Enter** keeps the filter, **Esc** clears it
+- **:** or **Ctrl+P** opens the command palette: type a few letters of a command, a page ("go queue"), one of your podcasts, an episode on screen somewhere ("play …") or a recent search, then **Enter**
 - **?** shows every key for the page you're on. **q** quits (**Ctrl+C** works anywhere, even mid-typing)
 
 ### Playing
@@ -173,6 +175,7 @@ src/
 └── tui/           # Terminal user interface
     ├── app.rs     # Sidebar, now-playing bar, overlays, input routing
     ├── keymap.rs  # Default bindings and keymap.toml
+    ├── palette.rs # The command palette
     ├── task.rs    # Background loading
     ├── ui/        # Shared widgets: lists, episode rows, show notes
     └── pages/     # The screens
@@ -248,10 +251,10 @@ This project is licensed under the GNU General Public License v3.0; see the [LIC
 
 ## 🗺️ Roadmap
 
-- [ ] History, playlists and collections
-- [ ] Chapters and transcripts
-- [ ] Podcast discovery and subscribing
-- [ ] A command palette
+- [x] History, playlists and collections
+- [x] Chapters and transcripts
+- [x] Podcast discovery and subscribing
+- [x] A command palette
 - [ ] Cover art in terminals that can show images
 - [ ] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
 - [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on

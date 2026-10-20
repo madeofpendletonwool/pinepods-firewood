@@ -215,4 +215,8 @@ impl Page for EpisodePage {
     fn selected_episode(&self) -> Option<Episode> {
         Some(self.episode.clone())
     }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        vec![&self.episode]
+    }
 }

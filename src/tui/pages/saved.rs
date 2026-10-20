@@ -248,4 +248,8 @@ impl Page for SavedPage {
             self.saved.selected_episode()
         }
     }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        self.saved.episodes()
+    }
 }

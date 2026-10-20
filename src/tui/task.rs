@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
+use super::pages::search::RecentSearch;
 use crate::api::ApiResult;
 
 /// A request in flight.
@@ -178,6 +179,7 @@ pub struct Toast {
 pub enum Event {
     Toast(Toast),
     Changed(Resource),
+    Searched(RecentSearch),
 }
 
 /// The pages' way to tell the app things. Cheap to clone into spawned tasks.
@@ -210,6 +212,10 @@ impl Bus {
 
     pub fn error(&self, text: impl Into<String>) {
         self.toast(ToastKind::Error, text);
+    }
+
+    pub fn searched(&self, search: RecentSearch) {
+        let _ = self.tx.send(Event::Searched(search));
     }
 
     pub fn changed(&self, resource: Resource) {

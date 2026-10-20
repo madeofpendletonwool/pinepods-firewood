@@ -15,7 +15,7 @@ use unicode_width::UnicodeWidthStr;
 use super::discover::{self, Discover};
 use super::episode::EpisodePage;
 use super::{Ctx, Outcome, Page};
-use crate::api::{Directory, Episode};
+use crate::api::{Directory, Episode, Podcast};
 use crate::tui::keymap::{Action, Context};
 use crate::tui::task::{Remote, Resource};
 use crate::tui::ui::episodes::{self, Columns};
@@ -64,6 +64,28 @@ impl Mode {
     }
 }
 
+/// A search that went out, for the command palette to offer again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecentSearch {
+    mode: Mode,
+    pub query: String,
+}
+
+impl RecentSearch {
+    pub fn label(&self) -> String {
+        match self.mode {
+            Mode::Episodes => format!("Search for {}", self.query),
+            mode => format!("Search {} for {}", mode.title(), self.query),
+        }
+    }
+
+    /// Whether `self` was a step on the way to typing `later`, so only the
+    /// finished query is kept.
+    pub fn leads_to(&self, later: &RecentSearch) -> bool {
+        self.mode == later.mode && later.query.starts_with(&self.query)
+    }
+}
+
 pub struct SearchPage {
     mode: Mode,
     query: String,
@@ -75,6 +97,8 @@ pub struct SearchPage {
     results: Remote<Vec<Episode>>,
     list: ListView,
     discover: Discover,
+    /// Search as soon as the page shows; set when it's opened to repeat a search.
+    search_on_show: bool,
 }
 
 impl Default for SearchPage {
@@ -88,21 +112,37 @@ impl Default for SearchPage {
             results: Remote::default(),
             list: ListView::default(),
             discover: Discover::default(),
+            search_on_show: false,
         }
     }
 }
 
 impl SearchPage {
+    /// The page with `recent` searched for again.
+    pub fn repeat(recent: &RecentSearch) -> Self {
+        Self {
+            mode: recent.mode,
+            query: recent.query.clone(),
+            editing: false,
+            search_on_show: true,
+            ..Self::default()
+        }
+    }
+
     fn search(&mut self, cx: &Ctx) {
         self.edited = None;
+        let term = self.query.trim().to_string();
         if let Mode::Find(source) = self.mode {
+            if !term.is_empty() {
+                self.remember(term, cx);
+            }
             self.discover.search(source, &self.query, cx);
             return;
         }
-        let term = self.query.trim().to_string();
         if term.chars().count() < MIN_QUERY || term == self.searched && !self.results.needs_load() {
             return;
         }
+        self.remember(term.clone(), cx);
         self.searched = term.clone();
         let api = cx.api.clone();
         self.results.load(async move {
@@ -116,6 +156,13 @@ impl SearchPage {
                 .map(|r| r.episode)
                 .filter(|e| seen.insert(e.key()))
                 .collect())
+        });
+    }
+
+    fn remember(&self, query: String, cx: &Ctx) {
+        cx.bus.searched(RecentSearch {
+            mode: self.mode,
+            query,
         });
     }
 
@@ -193,6 +240,9 @@ impl Page for SearchPage {
     fn show(&mut self, cx: &Ctx) {
         if let Mode::Find(_) = self.mode {
             self.discover.show(cx);
+        }
+        if std::mem::take(&mut self.search_on_show) {
+            self.search(cx);
         }
     }
 
@@ -426,5 +476,13 @@ impl Page for SearchPage {
             .selected_index()
             .and_then(|i| self.items().get(i))
             .cloned()
+    }
+
+    fn episodes(&self) -> Vec<&Episode> {
+        self.items().iter().collect()
+    }
+
+    fn podcasts(&self) -> Vec<&Podcast> {
+        self.discover.following()
     }
 }

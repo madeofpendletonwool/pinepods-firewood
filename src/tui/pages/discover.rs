@@ -163,6 +163,11 @@ impl Discover {
     }
 
     /// Searches again next time, as with a changed query.
+    /// The podcasts you follow, if they've been loaded.
+    pub fn following(&self) -> Vec<&Podcast> {
+        self.following.data.iter().flatten().collect()
+    }
+
     pub fn forget(&mut self) {
         self.searched = None;
     }
