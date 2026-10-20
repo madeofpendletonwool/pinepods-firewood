@@ -1,4 +1,5 @@
-//! One episode: what it is, where you are in it, and its show notes.
+//! One episode: what it is, where you are in it, and its show notes, chapters and
+//! transcript.
 
 use ratatui::{
     Frame,
@@ -13,22 +14,44 @@ use super::{Ctx, Outcome, Page};
 use crate::api::Episode;
 use crate::tui::keymap::{Action, Context};
 use crate::tui::task::{Remote, Resource};
-use crate::tui::ui::notes::NotesView;
+use crate::tui::ui::details::{self, Details};
 use crate::tui::ui::{self, episodes};
 
 pub struct EpisodePage {
     episode: Episode,
     /// The full record, fetched when the list's copy has no description.
-    details: Remote<Episode>,
-    notes: NotesView,
+    full: Remote<Episode>,
+    details: Details,
 }
 
 impl EpisodePage {
     pub fn new(episode: Episode) -> Self {
         Self {
             episode,
-            details: Remote::default(),
-            notes: NotesView::default(),
+            full: Remote::default(),
+            details: Details::default(),
+        }
+    }
+}
+
+impl EpisodePage {
+    /// Where playback is in this episode, if it's the one playing.
+    fn position(&self, cx: &Ctx) -> Option<f64> {
+        let playing = cx.player.current_episode.as_ref()?;
+        (playing.key() == self.episode.key()).then_some(cx.player.current_position.as_secs_f64())
+    }
+
+    /// Jumps there if this episode is playing, or starts it from there.
+    fn play_from(&self, start: f64, cx: &Ctx) {
+        let start = std::time::Duration::from_secs_f64(start.max(0.0));
+        let result = if self.position(cx).is_some() {
+            cx.playback.seek(start)
+        } else {
+            cx.playback.play_episode_from(self.episode.clone(), start)
+        };
+        if result.is_err() {
+            cx.bus
+                .error("Playback has stopped working; restart Firewood");
         }
     }
 }
@@ -39,12 +62,13 @@ impl Page for EpisodePage {
     }
 
     fn contexts(&self) -> &'static [Context] {
-        &[Context::Episode, Context::List]
+        &[Context::Episode, Context::Details, Context::List]
     }
 
     fn hints(&self) -> &'static [Action] {
         &[
             Action::Activate,
+            Action::CycleView,
             Action::Queue,
             Action::PlayNext,
             Action::Save,
@@ -55,36 +79,53 @@ impl Page for EpisodePage {
     }
 
     fn show(&mut self, cx: &Ctx) {
-        if self.episode.episode_description.trim().is_empty() && self.details.needs_load() {
+        if self.episode.episode_description.trim().is_empty() && self.full.needs_load() {
             let (api, key) = (cx.api.clone(), self.episode.key());
-            self.details
+            self.full
                 .load(async move { api.get_episode_metadata(key).await });
         }
+        self.details.set_episode(&self.episode, cx);
     }
 
     fn tick(&mut self, cx: &Ctx) {
-        if self.details.poll(cx.bus)
-            && let Some(full) = self.details.data.take()
+        if self.full.poll(cx.bus)
+            && let Some(full) = self.full.data.take()
         {
             self.episode = Episode {
                 podcast_name: full.podcast_name.or(self.episode.podcast_name.take()),
                 ..full
             };
-            self.notes = NotesView::default();
         }
+        self.details.tick(cx);
     }
 
     fn changed(&mut self, _resource: Resource) {}
 
     fn busy(&self) -> bool {
-        self.details.is_loading()
+        self.full.is_loading() || self.details.busy()
     }
 
     fn action(&mut self, action: Action, cx: &mut Ctx) -> Outcome {
         match action {
-            Action::Activate => episodes::play(&self.episode, cx),
+            Action::CycleView => {
+                if !self.details.cycle(self.position(cx), cx) {
+                    cx.bus.info("This episode has no chapters or transcript");
+                }
+                return Outcome::Handled;
+            }
             Action::Back => return Outcome::Pop,
-            other if self.notes.action(other) => {}
+            _ => {}
+        }
+        match self.details.action(action) {
+            details::Outcome::Seek(start) => {
+                self.play_from(start, cx);
+                return Outcome::Handled;
+            }
+            details::Outcome::Handled => return Outcome::Handled,
+            details::Outcome::Ignored => {}
+        }
+        match action {
+            Action::Activate => episodes::play(&self.episode, cx),
             other => {
                 if !episodes::apply(other, &mut self.episode, cx) {
                     return Outcome::Ignored;
@@ -94,11 +135,14 @@ impl Page for EpisodePage {
         Outcome::Handled
     }
 
-    fn mouse(&mut self, event: MouseEvent, _cx: &mut Ctx) -> Outcome {
-        if self.notes.mouse(event) {
-            Outcome::Handled
-        } else {
-            Outcome::Ignored
+    fn mouse(&mut self, event: MouseEvent, cx: &mut Ctx) -> Outcome {
+        match self.details.mouse(event) {
+            details::Outcome::Seek(start) => {
+                self.play_from(start, cx);
+                Outcome::Handled
+            }
+            details::Outcome::Handled => Outcome::Handled,
+            details::Outcome::Ignored => Outcome::Ignored,
         }
     }
 
@@ -158,22 +202,14 @@ impl Page for EpisodePage {
             head,
         );
 
-        if self.details.is_empty_loading() && e.episode_description.trim().is_empty() {
+        if self.full.is_empty_loading() && e.episode_description.trim().is_empty() {
             ui::load_state(frame, notes_area, theme, true, None, "show notes");
             return;
         }
-        if e.episode_description.trim().is_empty() {
-            ui::message(
-                frame,
-                notes_area,
-                vec![Line::styled("No show notes.", theme.muted())],
-                theme.base(),
-            );
-            return;
-        }
-        let (key, html) = (e.key(), e.episode_description.clone());
-        self.notes
-            .render(frame, notes_area, key, &html, theme, theme.base());
+        let position = self.position(cx);
+        let episode = self.episode.clone();
+        self.details
+            .render(frame, notes_area, &episode, position, theme, theme.base());
     }
 
     fn selected_episode(&self) -> Option<Episode> {

@@ -1,8 +1,10 @@
 //! Pieces every page draws with.
 
+pub mod details;
 pub mod episodes;
 pub mod list;
 pub mod notes;
+pub mod transcript;
 
 use std::time::{Duration, Instant};
 
@@ -79,6 +81,15 @@ pub fn clock(duration: Duration) -> String {
         format!("{h}:{m:02}:{s:02}")
     } else {
         format!("{m}:{s:02}")
+    }
+}
+
+/// `1 episode`, `12 episodes`.
+pub fn episode_count(n: i64) -> String {
+    if n == 1 {
+        "1 episode".into()
+    } else {
+        format!("{n} episodes")
     }
 }
 

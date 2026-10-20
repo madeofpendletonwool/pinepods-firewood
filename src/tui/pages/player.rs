@@ -1,5 +1,5 @@
 //! What's playing, full screen: progress you can click to seek, the transport,
-//! volume, speed and skips, and the show notes underneath.
+//! volume, speed and skips, and the show notes, chapters and transcript underneath.
 
 use std::time::Duration;
 
@@ -17,7 +17,8 @@ use crate::audio::skip::SkipKind;
 use crate::playback::{PlaybackState, PlayerState};
 use crate::theme::Theme;
 use crate::tui::keymap::{Action, Context};
-use crate::tui::ui::notes::NotesView;
+use crate::tui::text::truncate;
+use crate::tui::ui::details::{self, Details};
 use crate::tui::ui::{self, clock};
 
 /// How long "Skipped …" stays on screen after a jump.
@@ -26,7 +27,7 @@ const VOLUME_STEP: f32 = 0.05;
 
 #[derive(Default)]
 pub struct PlayerPage {
-    notes: NotesView,
+    details: Details,
     /// Clickable parts, from the last frame.
     progress_area: Rect,
     buttons: [Rect; 3],
@@ -102,7 +103,7 @@ impl Page for PlayerPage {
     }
 
     fn contexts(&self) -> &'static [Context] {
-        &[Context::Player, Context::List]
+        &[Context::Player, Context::Details, Context::List]
     }
 
     fn hints(&self) -> &'static [Action] {
@@ -110,15 +111,45 @@ impl Page for PlayerPage {
             Action::TogglePlay,
             Action::SeekBackward,
             Action::SeekForward,
-            Action::VolumeUp,
+            Action::CycleView,
+            Action::NextChapter,
             Action::SpeedUp,
             Action::TrimSilence,
         ]
     }
 
+    fn tick(&mut self, cx: &Ctx) {
+        if let Some(episode) = &cx.player.current_episode {
+            self.details.set_episode(episode, cx);
+        }
+        self.details.tick(cx);
+    }
+
+    fn busy(&self) -> bool {
+        self.details.busy()
+    }
+
     fn action(&mut self, action: Action, cx: &mut Ctx) -> Outcome {
         let state = cx.player;
+        let position = state.current_position.as_secs_f64();
         let result = match action {
+            Action::CycleView => {
+                if !self.details.cycle(Some(position), cx) {
+                    cx.bus.info("This episode has no chapters or transcript");
+                }
+                Ok(())
+            }
+            Action::NextChapter | Action::PrevChapter => {
+                let forward = action == Action::NextChapter;
+                match self.details.chapter_jump(position, forward) {
+                    Some(start) => cx.playback.seek(Duration::from_secs_f64(start)),
+                    None if self.details.has_chapters() => Ok(()),
+                    None => {
+                        cx.bus.info("This episode has no chapters");
+                        Ok(())
+                    }
+                }
+            }
             Action::Stop => cx.playback.stop(),
             Action::ResetSpeed => cx.playback.set_speed(1.0),
             Action::TrimSilence => {
@@ -135,8 +166,11 @@ impl Page for PlayerPage {
             Action::VolumeDown => cx
                 .playback
                 .set_volume((state.volume - VOLUME_STEP).max(0.0)),
-            other if self.notes.action(other) => Ok(()),
-            _ => return Outcome::Ignored,
+            other => match self.details.action(other) {
+                details::Outcome::Seek(start) => cx.playback.seek(Duration::from_secs_f64(start)),
+                details::Outcome::Handled => Ok(()),
+                details::Outcome::Ignored => return Outcome::Ignored,
+            },
         };
         if result.is_err() {
             cx.bus
@@ -149,7 +183,7 @@ impl Page for PlayerPage {
         let at = Position::new(event.column, event.row);
         match event.kind {
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
-                self.notes.mouse(event);
+                self.details.mouse(event);
             }
             MouseEventKind::Down(MouseButton::Left) if self.progress_area.contains(at) => {
                 let total = cx.player.total_duration;
@@ -169,7 +203,14 @@ impl Page for PlayerPage {
                 } else if self.buttons[2].contains(at) {
                     cx.playback.skip_forward(skip)
                 } else {
-                    return Outcome::Ignored;
+                    return match self.details.mouse(event) {
+                        details::Outcome::Seek(start) => {
+                            let _ = cx.playback.seek(Duration::from_secs_f64(start));
+                            Outcome::Handled
+                        }
+                        details::Outcome::Handled => Outcome::Handled,
+                        details::Outcome::Ignored => Outcome::Ignored,
+                    };
                 };
                 if result.is_err() {
                     cx.bus
@@ -245,12 +286,22 @@ impl Page for PlayerPage {
             .alignment(Alignment::Center),
             title,
         );
+        let mut byline = vec![Span::styled(
+            episode.podcast_name.clone().unwrap_or_default(),
+            theme.muted(),
+        )];
+        if let Some(chapter) = self
+            .details
+            .chapter_at(state.current_position.as_secs_f64())
+        {
+            byline.push(Span::styled("  ·  ", theme.faint()));
+            byline.push(Span::styled(
+                format!("▸ {}", truncate(chapter, usize::from(podcast.width) / 2)),
+                theme.accent(),
+            ));
+        }
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                episode.podcast_name.clone().unwrap_or_default(),
-                theme.muted(),
-            ))
-            .alignment(Alignment::Center),
+            Paragraph::new(Line::from(byline)).alignment(Alignment::Center),
             podcast,
         );
 
@@ -331,8 +382,14 @@ impl Page for PlayerPage {
             status,
         );
 
-        let (key, html) = (episode.key(), episode.episode_description.clone());
-        self.notes
-            .render(frame, notes_area, key, &html, theme, theme.muted());
+        let position = state.current_position.as_secs_f64();
+        self.details.render(
+            frame,
+            notes_area,
+            episode,
+            Some(position),
+            theme,
+            theme.muted(),
+        );
     }
 }

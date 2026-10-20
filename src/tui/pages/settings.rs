@@ -144,14 +144,7 @@ fn keymap_template() -> String {
          # action; an action lists every key that should trigger it. Keys look like\n\
          # \"q\", \"G\", \"space\", \"enter\", \"ctrl+r\", \"shift+up\", \"f5\".\n",
     );
-    for context in [
-        Context::Global,
-        Context::List,
-        Context::Episode,
-        Context::Queue,
-        Context::Player,
-        Context::Devices,
-    ] {
+    for context in Context::ALL {
         out.push_str(&format!("\n[{}]\n", context_name(context)));
         for (action, keys) in keymap.bindings(context) {
             let keys: Vec<String> = keys.iter().map(|k| format!("{:?}", key_spec(*k))).collect();

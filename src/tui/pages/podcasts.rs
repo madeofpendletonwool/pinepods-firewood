@@ -1,5 +1,7 @@
 //! Subscriptions. Opening one lists its episodes.
 
+use std::time::{Duration, Instant};
+
 use ratatui::{
     Frame,
     crossterm::event::{KeyEvent, MouseEvent},
@@ -8,7 +10,7 @@ use ratatui::{
     widgets::{Cell, Row},
 };
 
-use super::episodes::EpisodeListPage;
+use super::episodes::{self, EpisodeListPage};
 use super::{Ctx, Outcome, Page};
 use crate::api::Podcast;
 use crate::tui::keymap::{Action, Context};
@@ -16,10 +18,15 @@ use crate::tui::task::{Remote, Resource};
 use crate::tui::text::truncate;
 use crate::tui::ui::{self, list::Click, list::ListView};
 
+/// Pressing Unsubscribe again within this long goes ahead.
+const CONFIRM_WINDOW: Duration = Duration::from_secs(3);
+
 #[derive(Default)]
 pub struct PodcastsPage {
     data: Remote<Vec<Podcast>>,
     list: ListView,
+    /// The podcast Unsubscribe was first pressed on, and when.
+    unsubscribe_armed: Option<(i64, Instant)>,
 }
 
 fn search_text(p: &Podcast) -> String {
@@ -46,6 +53,39 @@ impl PodcastsPage {
         };
         Outcome::Push(Box::new(EpisodeListPage::podcast(podcast.clone())))
     }
+
+    /// The first press asks for a second, on the same podcast.
+    fn unsubscribe(&mut self, cx: &Ctx) {
+        let Some(index) = self.list.selected_index() else {
+            return;
+        };
+        let Some(podcast) = self.items().get(index).cloned() else {
+            return;
+        };
+        let armed = self
+            .unsubscribe_armed
+            .is_some_and(|(id, at)| id == podcast.podcastid && at.elapsed() <= CONFIRM_WINDOW);
+        if !armed {
+            self.unsubscribe_armed = Some((podcast.podcastid, Instant::now()));
+            let key = cx
+                .keymap
+                .key_for(Action::Unsubscribe, self.contexts())
+                .map(|k| k.to_string())
+                .unwrap_or_default();
+            cx.bus.info(format!(
+                "Press {key} again to unsubscribe from {}",
+                truncate(&podcast.podcastname, 40)
+            ));
+            return;
+        }
+        self.unsubscribe_armed = None;
+        episodes::unsubscribe(&podcast, cx);
+        if let Some(items) = self.data.data.as_mut() {
+            items.retain(|p| p.podcastid != podcast.podcastid);
+        }
+        let items = self.data.data.as_deref().unwrap_or_default();
+        self.list.sync(items, search_text);
+    }
 }
 
 impl Page for PodcastsPage {
@@ -54,11 +94,11 @@ impl Page for PodcastsPage {
     }
 
     fn contexts(&self) -> &'static [Context] {
-        &[Context::List]
+        &[Context::Podcast, Context::List]
     }
 
     fn hints(&self) -> &'static [Action] {
-        &[Action::Activate, Action::Filter, Action::Refresh]
+        &[Action::Activate, Action::Filter, Action::Unsubscribe]
     }
 
     fn show(&mut self, cx: &Ctx) {
@@ -103,12 +143,13 @@ impl Page for PodcastsPage {
         Some(Outcome::Handled)
     }
 
-    fn action(&mut self, action: Action, _cx: &mut Ctx) -> Outcome {
+    fn action(&mut self, action: Action, cx: &mut Ctx) -> Outcome {
         if self.list.navigate(action) {
             return Outcome::Handled;
         }
         match action {
             Action::Activate | Action::Open => return self.open(),
+            Action::Unsubscribe => self.unsubscribe(cx),
             Action::Filter => self.list.start_filter(),
             Action::Back if self.list.is_filtered() => {
                 self.list.clear_filter();
@@ -144,7 +185,7 @@ impl Page for PodcastsPage {
             let text = if self.list.is_filtered() {
                 "Nothing matches."
             } else {
-                "No subscriptions yet. Add podcasts in the web app."
+                "No subscriptions yet. Find podcasts to follow in Search (press f there)."
             };
             ui::message(
                 frame,
