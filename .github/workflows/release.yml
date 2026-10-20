@@ -34,8 +34,10 @@ jobs:
             name: linux-arm64
             
           # macOS targets
+          # Cross-compiled on Apple Silicon: GitHub retired the Intel macos-13
+          # runner, which left releases without this archive.
           - target: x86_64-apple-darwin
-            os: macos-13  # Intel runner
+            os: macos-latest
             name: macos-amd64
             
           - target: aarch64-apple-darwin
