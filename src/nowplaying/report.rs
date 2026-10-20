@@ -211,6 +211,7 @@ mod tests {
             buffering: false,
             reconnecting: None,
             skips: Default::default(),
+            playlist: None,
         };
         let report = report_of(&state);
         assert_eq!(report.episode_id, 0);
@@ -233,6 +234,7 @@ mod tests {
             buffering: true,
             reconnecting: None,
             skips: Default::default(),
+            playlist: None,
         };
         let report = report_of(&state);
         assert_eq!((report.episode_id, report.playing), (3, false));

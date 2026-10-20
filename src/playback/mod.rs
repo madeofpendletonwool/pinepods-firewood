@@ -68,6 +68,9 @@ pub struct PlayerState {
     /// Which attempt at reopening dropped audio is underway, if any.
     pub reconnecting: Option<u32>,
     pub skips: SkipInfo,
+    /// The playlist this episode was started from; when it ends, the playlist's next
+    /// episode plays instead of the queue's.
+    pub playlist: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -103,8 +106,9 @@ pub struct PlaybackClosed;
 #[derive(Debug)]
 enum Command {
     Play {
-        episode: Episode,
+        episode: Box<Episode>,
         start: Option<Duration>,
+        playlist: Option<i64>,
     },
     Pause,
     Resume,
@@ -146,6 +150,7 @@ impl Playback {
             buffering: false,
             reconnecting: None,
             skips: SkipInfo::default(),
+            playlist: None,
         });
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (internal_tx, internal_rx) = mpsc::unbounded_channel();
@@ -175,8 +180,24 @@ impl Playback {
 
     pub fn play_episode(&self, episode: Episode) -> Result<(), PlaybackClosed> {
         self.send(Command::Play {
-            episode,
+            episode: Box::new(episode),
             start: None,
+            playlist: None,
+        })
+    }
+
+    /// Plays an episode as part of a playlist, the way the web app does: it isn't
+    /// moved up the queue, and when it ends the playlist's next episode follows. Once
+    /// the playlist runs out, the queue takes over again.
+    pub fn play_from_playlist(
+        &self,
+        episode: Episode,
+        playlist_id: i64,
+    ) -> Result<(), PlaybackClosed> {
+        self.send(Command::Play {
+            episode: Box::new(episode),
+            start: None,
+            playlist: Some(playlist_id),
         })
     }
 
@@ -188,8 +209,9 @@ impl Playback {
         start: Duration,
     ) -> Result<(), PlaybackClosed> {
         self.send(Command::Play {
-            episode,
+            episode: Box::new(episode),
             start: Some(start),
+            playlist: None,
         })
     }
 
@@ -271,6 +293,7 @@ struct Current {
     segments: Vec<SkipSegment>,
     trim: Option<SilenceTrim>,
     retries: u32,
+    playlist: Option<i64>,
 }
 
 /// Results from background work, tagged with the track they were for so late answers
@@ -292,6 +315,7 @@ enum Internal {
     Next {
         after: TrackId,
         episode: Option<Episode>,
+        playlist: Option<i64>,
     },
 }
 
@@ -346,7 +370,11 @@ impl Controller {
 
     fn handle(&mut self, command: Command) {
         match command {
-            Command::Play { episode, start } => self.play(episode, start),
+            Command::Play {
+                episode,
+                start,
+                playlist,
+            } => self.play(*episode, start, playlist),
             Command::Pause => self.set_paused(true),
             Command::Resume => self.resume(),
             Command::Stop => self.stop(),
@@ -370,7 +398,7 @@ impl Controller {
         }
     }
 
-    fn play(&mut self, episode: Episode, start: Option<Duration>) {
+    fn play(&mut self, episode: Episode, start: Option<Duration>, playlist: Option<i64>) {
         self.checkpoint();
         self.cancel_loading();
 
@@ -390,6 +418,7 @@ impl Controller {
             s.buffering = false;
             s.reconnecting = None;
             s.skips = SkipInfo::default();
+            s.playlist = playlist;
         });
         self.tracker.reset_episode();
         self.open(track, &episode, true);
@@ -406,6 +435,7 @@ impl Controller {
             segments: Vec::new(),
             trim: None,
             retries: 0,
+            playlist,
         });
     }
 
@@ -541,7 +571,11 @@ impl Controller {
                 }
                 self.open(next, &episode, false);
             }
-            Internal::Next { after, episode } => {
+            Internal::Next {
+                after,
+                episode,
+                playlist,
+            } => {
                 let still_finished = self
                     .current
                     .as_ref()
@@ -549,8 +583,12 @@ impl Controller {
                     && self.state.borrow().playback_state == PlaybackState::Stopped;
                 match episode {
                     Some(episode) if still_finished => {
-                        tracing::info!(episode_id = episode.episode_id, "playing next in queue");
-                        self.play(episode, None);
+                        tracing::info!(
+                            episode_id = episode.episode_id,
+                            playlist,
+                            "playing what's next"
+                        );
+                        self.play(episode, None, playlist);
                     }
                     _ => {}
                 }
@@ -604,6 +642,7 @@ impl Controller {
                 let paused = current.paused;
                 let start_at = current.start_at;
                 let key = current.episode.key();
+                let from_playlist = current.playlist.is_some();
                 let announce = !std::mem::replace(&mut current.announced, true);
                 self.state.send_modify(|s| {
                     s.playback_state = if paused {
@@ -620,7 +659,7 @@ impl Controller {
                 // The outro skip is measured from the end, which may only be known now.
                 self.apply_skips();
                 if announce {
-                    self.on_started(key, start_at);
+                    self.on_started(key, start_at, !from_playlist);
                 }
             }
             EngineEvent::Finished { track } => {
@@ -629,6 +668,7 @@ impl Controller {
                 };
                 current.started = false;
                 let key = current.episode.key();
+                let playlist = current.playlist;
                 let end = self.state.borrow().total_duration;
                 tracing::info!(episode_id = key.episode_id, "episode finished");
                 self.state.send_modify(|s| {
@@ -636,7 +676,7 @@ impl Controller {
                     s.current_position = end;
                     s.buffering = false;
                 });
-                self.finish_and_advance(track, key, end);
+                self.finish_and_advance(track, key, end, playlist);
             }
             EngineEvent::Failed {
                 track,
@@ -720,9 +760,16 @@ impl Controller {
         }
     }
 
-    /// Saves the end of the episode, marks it played, then starts the next one in the
-    /// queue the way the web app does.
-    fn finish_and_advance(&self, track: TrackId, key: EpisodeKey, end: Duration) {
+    /// Saves the end of the episode, marks it played, then starts what's next the way
+    /// the web app does: the playlist's next episode if it came from one, otherwise
+    /// (or once the playlist runs out) the next in the queue.
+    fn finish_and_advance(
+        &self,
+        track: TrackId,
+        key: EpisodeKey,
+        end: Duration,
+        playlist: Option<i64>,
+    ) {
         let api = self.api.clone();
         let tx = self.internal_tx.clone();
         tokio::spawn(async move {
@@ -732,6 +779,20 @@ impl Controller {
             // This also takes the episode out of the queue.
             if let Err(err) = api.mark_completed(key).await {
                 tracing::warn!("couldn't mark the episode played: {err}");
+            }
+            if let Some(playlist_id) = playlist {
+                match api.get_next_playlist_episode(key, playlist_id).await {
+                    Ok(Some(episode)) => {
+                        let _ = tx.send(Internal::Next {
+                            after: track,
+                            episode: Some(episode),
+                            playlist,
+                        });
+                        return;
+                    }
+                    Ok(None) => tracing::info!("reached the end of the playlist"),
+                    Err(err) => tracing::warn!("couldn't get the playlist's next episode: {err}"),
+                }
             }
             let episode = match api.get_queue().await {
                 Ok(queue) => next_in_queue(queue, key),
@@ -743,12 +804,14 @@ impl Controller {
             let _ = tx.send(Internal::Next {
                 after: track,
                 episode,
+                playlist: None,
             });
         });
     }
 
-    /// The same bookkeeping the web and mobile apps do when an episode starts.
-    fn on_started(&self, key: EpisodeKey, start_at: Duration) {
+    /// The same bookkeeping the web and mobile apps do when an episode starts. An
+    /// episode from a playlist isn't moved up the queue.
+    fn on_started(&self, key: EpisodeKey, start_at: Duration, bump_queue: bool) {
         let secs = start_at.as_secs_f64();
         self.call("record the play in history", move |api| async move {
             // History resets the saved position to 0, so put it back straight away
@@ -759,6 +822,9 @@ impl Controller {
         self.call("count the play", |api| async move {
             api.increment_played().await
         });
+        if !bump_queue {
+            return;
+        }
         self.call(
             "move the episode to the top of the queue",
             move |api| async move {
@@ -819,7 +885,8 @@ impl Controller {
                     position.as_secs() as i64
                 });
                 episode.completed = false;
-                self.play(episode, None);
+                let playlist = c.playlist;
+                self.play(episode, None, playlist);
             }
             None => {}
         }
