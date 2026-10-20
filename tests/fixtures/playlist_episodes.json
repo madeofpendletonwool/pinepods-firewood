@@ -1,0 +1,43 @@
+{
+  "episodes": [
+    {
+      "episodetitle": "Short one",
+      "podcastname": "Daily News",
+      "episodepubdate": "2026-10-18T05:00:00",
+      "episodedescription": "<p>Hi</p>",
+      "episodeartwork": "",
+      "episodeurl": "https://example.com/7.mp3",
+      "episodeduration": 1500,
+      "listenduration": null,
+      "episodeid": 7,
+      "websiteurl": "",
+      "completed": false,
+      "saved": true,
+      "queued": false,
+      "downloaded": false,
+      "is_youtube": false,
+      "podcastid": 4,
+      "savedate": null
+    }
+  ],
+  "playlist_info": {
+    "name": "Commuter Mix",
+    "description": "",
+    "episode_count": 1,
+    "icon_name": "ph-car",
+    "is_system_playlist": true,
+    "podcast_ids": null,
+    "include_unplayed": true,
+    "include_partially_played": true,
+    "include_played": false,
+    "min_duration": 900,
+    "max_duration": 2700,
+    "sort_order": "date_desc",
+    "group_by_podcast": false,
+    "max_episodes": null,
+    "play_progress_min": null,
+    "play_progress_max": null,
+    "time_filter_hours": null
+  },
+  "total": 1
+}

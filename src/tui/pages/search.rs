@@ -1,4 +1,5 @@
-//! Searches the episodes of your subscriptions on the server as you type.
+//! Search: the episodes of your subscriptions, as you type, or new podcasts to
+//! follow from Podcast Index, iTunes and YouTube. `f` switches between them.
 
 use std::time::{Duration, Instant};
 
@@ -11,9 +12,10 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
+use super::discover::{self, Discover};
 use super::episode::EpisodePage;
 use super::{Ctx, Outcome, Page};
-use crate::api::Episode;
+use crate::api::{Directory, Episode};
 use crate::tui::keymap::{Action, Context};
 use crate::tui::task::{Remote, Resource};
 use crate::tui::ui::episodes::{self, Columns};
@@ -24,7 +26,46 @@ use crate::tui::ui::{self, today};
 const DEBOUNCE: Duration = Duration::from_millis(350);
 const MIN_QUERY: usize = 2;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    /// Episodes of the podcasts you follow, from the server.
+    Episodes,
+    Find(discover::Source),
+}
+
+impl Mode {
+    const ALL: [Mode; 4] = [
+        Self::Episodes,
+        Self::Find(discover::Source::Directory(Directory::PodcastIndex)),
+        Self::Find(discover::Source::Directory(Directory::Itunes)),
+        Self::Find(discover::Source::YouTube),
+    ];
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Episodes => "Your podcasts",
+            Self::Find(discover::Source::Directory(Directory::PodcastIndex)) => "Podcast Index",
+            Self::Find(discover::Source::Directory(Directory::Itunes)) => "iTunes",
+            Self::Find(discover::Source::YouTube) => "YouTube",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Self::Episodes => "Episode or podcast…",
+            Self::Find(discover::Source::YouTube) => "Channel name, then Enter…",
+            Self::Find(_) => "Podcast name, then Enter…",
+        }
+    }
+
+    fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|m| *m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
 pub struct SearchPage {
+    mode: Mode,
     query: String,
     editing: bool,
     /// When the query last changed without being searched for.
@@ -33,17 +74,20 @@ pub struct SearchPage {
     searched: String,
     results: Remote<Vec<Episode>>,
     list: ListView,
+    discover: Discover,
 }
 
 impl Default for SearchPage {
     fn default() -> Self {
         Self {
+            mode: Mode::Episodes,
             query: String::new(),
             editing: true,
             edited: None,
             searched: String::new(),
             results: Remote::default(),
             list: ListView::default(),
+            discover: Discover::default(),
         }
     }
 }
@@ -51,6 +95,10 @@ impl Default for SearchPage {
 impl SearchPage {
     fn search(&mut self, cx: &Ctx) {
         self.edited = None;
+        if let Mode::Find(source) = self.mode {
+            self.discover.search(source, &self.query, cx);
+            return;
+        }
         let term = self.query.trim().to_string();
         if term.chars().count() < MIN_QUERY || term == self.searched && !self.results.needs_load() {
             return;
@@ -74,6 +122,42 @@ impl SearchPage {
     fn items(&self) -> &[Episode] {
         self.results.data.as_deref().unwrap_or_default()
     }
+
+    fn has_results(&self) -> bool {
+        match self.mode {
+            Mode::Episodes => !self.list.is_empty(),
+            Mode::Find(_) => self.discover.has_results(),
+        }
+    }
+
+    fn switch_mode(&mut self, cx: &Ctx) {
+        self.mode = self.mode.next();
+        if let Mode::Find(_) = self.mode {
+            self.discover.show(cx);
+            self.discover.forget();
+            if !self.query.trim().is_empty() {
+                self.search(cx);
+            }
+        } else {
+            self.searched.clear();
+            self.search(cx);
+        }
+    }
+
+    fn render_modes(&self, frame: &mut Frame, area: Rect, cx: &Ctx) {
+        let theme = cx.theme;
+        let mut spans = Vec::new();
+        for mode in Mode::ALL {
+            let style = if mode == self.mode {
+                theme.active
+            } else {
+                theme.muted()
+            };
+            spans.push(Span::styled(format!(" {} ", mode.title()), style));
+            spans.push(Span::raw(" "));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+    }
 }
 
 impl Page for SearchPage {
@@ -82,21 +166,38 @@ impl Page for SearchPage {
     }
 
     fn contexts(&self) -> &'static [Context] {
-        &[Context::Episode, Context::List]
+        match self.mode {
+            Mode::Episodes => &[Context::Episode, Context::List],
+            Mode::Find(_) => &[Context::Discover, Context::List],
+        }
     }
 
     fn hints(&self) -> &'static [Action] {
-        &[
-            Action::Filter,
-            Action::Activate,
-            Action::Open,
-            Action::Queue,
-            Action::Save,
-        ]
+        match self.mode {
+            Mode::Episodes => &[
+                Action::Filter,
+                Action::Activate,
+                Action::Open,
+                Action::Queue,
+                Action::CycleFilter,
+            ],
+            Mode::Find(_) => &[
+                Action::Filter,
+                Action::Subscribe,
+                Action::Activate,
+                Action::CycleFilter,
+            ],
+        }
+    }
+
+    fn show(&mut self, cx: &Ctx) {
+        if let Mode::Find(_) = self.mode {
+            self.discover.show(cx);
+        }
     }
 
     fn tick(&mut self, cx: &Ctx) {
-        if self.edited.is_some_and(|at| at.elapsed() >= DEBOUNCE) {
+        if self.mode == Mode::Episodes && self.edited.is_some_and(|at| at.elapsed() >= DEBOUNCE) {
             self.search(cx);
         }
         if self.results.poll(cx.bus) {
@@ -104,18 +205,22 @@ impl Page for SearchPage {
             self.list.sync(items, episodes::search_text);
             self.list.navigate(Action::Top);
         }
+        self.discover.tick(cx);
     }
 
     fn refresh(&mut self, cx: &Ctx) {
         self.results.mark_stale();
         self.searched.clear();
+        self.discover.forget();
         self.search(cx);
     }
 
-    fn changed(&mut self, _resource: Resource) {}
+    fn changed(&mut self, resource: Resource) {
+        self.discover.changed(resource);
+    }
 
     fn busy(&self) -> bool {
-        self.results.is_loading()
+        self.results.is_loading() || self.discover.busy()
     }
 
     fn typing(&self) -> bool {
@@ -136,8 +241,10 @@ impl Page for SearchPage {
                 self.edited = None;
             }
             KeyCode::Enter | KeyCode::Down | KeyCode::Tab => {
-                self.search(cx);
-                if !self.list.is_empty() || key.code == KeyCode::Enter {
+                if self.mode == Mode::Episodes || key.code == KeyCode::Enter {
+                    self.search(cx);
+                }
+                if self.has_results() || key.code == KeyCode::Enter {
                     self.editing = false;
                 }
             }
@@ -160,11 +267,24 @@ impl Page for SearchPage {
     }
 
     fn action(&mut self, action: Action, cx: &mut Ctx) -> Outcome {
+        match action {
+            Action::Filter => {
+                self.editing = true;
+                return Outcome::Handled;
+            }
+            Action::CycleFilter => {
+                self.switch_mode(cx);
+                return Outcome::Handled;
+            }
+            _ => {}
+        }
+        if let Mode::Find(_) = self.mode {
+            return self.discover.action(action, cx);
+        }
         if self.list.navigate(action) {
             return Outcome::Handled;
         }
         match action {
-            Action::Filter => self.editing = true,
             Action::Activate => {
                 if let Some(e) = self.selected_episode() {
                     episodes::play(&e, cx);
@@ -191,6 +311,13 @@ impl Page for SearchPage {
     }
 
     fn mouse(&mut self, event: MouseEvent, cx: &mut Ctx) -> Outcome {
+        if let Mode::Find(_) = self.mode {
+            let outcome = self.discover.mouse(event, cx);
+            if !matches!(outcome, Outcome::Ignored) {
+                self.editing = false;
+            }
+            return outcome;
+        }
         match self.list.mouse(event) {
             Click::Activated => self.action(Action::Activate, cx),
             Click::Moved => {
@@ -203,8 +330,9 @@ impl Page for SearchPage {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, cx: &Ctx) {
         let theme = cx.theme;
-        let [input, _, body] = Layout::vertical([
+        let [input, modes, _, body] = Layout::vertical([
             Constraint::Length(3),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
@@ -216,9 +344,9 @@ impl Page for SearchPage {
             .border_style(theme.border(self.editing));
         let inner = block.inner(input);
         let text = if self.query.is_empty() && !self.editing {
-            Line::styled("Press / to search your podcasts", theme.faint())
+            Line::styled("Press / to search", theme.faint())
         } else if self.query.is_empty() {
-            Line::styled("Episode or podcast…", theme.faint())
+            Line::styled(self.mode.placeholder(), theme.faint())
         } else {
             Line::from(Span::raw(self.query.clone()))
         };
@@ -233,13 +361,20 @@ impl Page for SearchPage {
             let x = inner.x + 2 + self.query.width() as u16;
             frame.set_cursor_position((x.min(inner.right().saturating_sub(1)), inner.y));
         }
+        self.render_modes(frame, modes, cx);
 
+        if let Mode::Find(_) = self.mode {
+            self.discover.set_focused(!self.editing);
+            self.discover.render(frame, body, cx);
+            return;
+        }
         if self.searched.is_empty() {
             ui::message(
                 frame,
                 body,
                 vec![Line::styled(
-                    "Results come from the episodes of every podcast you follow.",
+                    "Results come from the episodes of every podcast you follow. \
+                     f finds new podcasts instead.",
                     theme.muted(),
                 )],
                 theme.base(),
@@ -284,6 +419,9 @@ impl Page for SearchPage {
     }
 
     fn selected_episode(&self) -> Option<Episode> {
+        if self.mode != Mode::Episodes {
+            return None;
+        }
         self.list
             .selected_index()
             .and_then(|i| self.items().get(i))

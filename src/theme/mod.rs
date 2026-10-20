@@ -13,6 +13,8 @@ use ratatui::style::{Color, Modifier, Style};
 
 use builtin::BUILTIN;
 
+use crate::api::CustomTheme;
+
 /// The theme to use until the server says otherwise; also the web app's default.
 pub const DEFAULT_THEME: &str = "Nordic";
 
@@ -96,6 +98,39 @@ impl Theme {
             .or_else(|| BUILTIN.iter().find(|t| t.name == DEFAULT_THEME))
             .expect("the default theme is built in");
         Self::from_tokens(tokens, depth)
+    }
+
+    /// A theme the user made in the web app, from its CSS colors, with the same
+    /// fallbacks as the built-in ones. `None` when its background isn't a color
+    /// Firewood can read; any other unreadable color falls back to the background or
+    /// the text.
+    pub fn from_custom(custom: &CustomTheme, depth: ColorDepth) -> Option<Self> {
+        let background = css_hex(&custom.background_color)?;
+        let text =
+            css_hex(&custom.text_color).unwrap_or(if Rgb::from(background).luminance() < 0.2 {
+                0xFFFFFF
+            } else {
+                0x000000
+            });
+        let or = |value: &str, fallback: u32| css_hex(value).unwrap_or(fallback);
+        let tokens = Tokens {
+            name: "",
+            background,
+            container: or(&custom.container_background, background),
+            button: or(&custom.button_color, background),
+            button_text: or(&custom.button_text_color, text),
+            text,
+            text_secondary: or(&custom.text_secondary_color, text),
+            border: or(&custom.border_color, text),
+            prog_bar: or(&custom.prog_bar_color, text),
+            error: or(&custom.error_color, 0xE5484D),
+            standout: or(&custom.standout_color, text),
+            hover: or(&custom.hover_color, text),
+            link: or(&custom.link_color, text),
+        };
+        let mut theme = Self::from_tokens(&tokens, depth);
+        theme.name = custom.name.clone();
+        Some(theme)
     }
 
     fn from_tokens(t: &Tokens, depth: ColorDepth) -> Self {
@@ -275,6 +310,17 @@ impl ColorDepth {
     }
 }
 
+/// `#rrggbb` or `#rgb`, as the web app's color pickers store them.
+fn css_hex(value: &str) -> Option<u32> {
+    let hex = value.trim().strip_prefix('#')?;
+    let full: String = match hex.len() {
+        3 => hex.chars().flat_map(|c| [c, c]).collect(),
+        6 => hex.to_string(),
+        _ => return None,
+    };
+    u32::from_str_radix(&full, 16).ok()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Rgb(u8, u8, u8);
 
@@ -430,6 +476,28 @@ mod tests {
         assert!(Theme::exists("hot dog stand - my eyes"));
         assert!(Theme::exists("terminal"));
         assert!(!Theme::exists("My Custom Theme"));
+    }
+
+    #[test]
+    fn builds_custom_themes_from_css_colors() {
+        let custom = CustomTheme {
+            name: "Mine".into(),
+            background_color: "#101010".into(),
+            text_color: "#EEE".into(),
+            link_color: "#66aaff".into(),
+            prog_bar_color: "not a color".into(),
+            ..Default::default()
+        };
+        let theme = Theme::from_custom(&custom, ColorDepth::TrueColor).unwrap();
+        assert_eq!(theme.name, "Mine");
+        assert_eq!(theme.bg, Color::Rgb(0x10, 0x10, 0x10));
+        assert_eq!(theme.text, Color::Rgb(0xEE, 0xEE, 0xEE));
+        assert_eq!(theme.accent, Color::Rgb(0x66, 0xAA, 0xFF));
+        let broken = CustomTheme {
+            background_color: "teal".into(),
+            ..custom
+        };
+        assert!(Theme::from_custom(&broken, ColorDepth::TrueColor).is_none());
     }
 
     #[test]

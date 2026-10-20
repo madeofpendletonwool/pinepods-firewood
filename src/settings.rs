@@ -81,6 +81,8 @@ impl Default for UiSettings {
                 "Podcasts",
                 "Queue",
                 "Saved",
+                "Playlists",
+                "History",
                 "Downloads",
                 "Search",
                 "Devices",

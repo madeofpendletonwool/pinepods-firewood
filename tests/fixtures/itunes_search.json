@@ -1,0 +1,29 @@
+{
+  "resultCount": 2,
+  "results": [
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "collectionId": 173001861,
+      "trackId": 173001861,
+      "artistName": "Dan Carlin",
+      "collectionName": "Dan Carlin's Hardcore History",
+      "trackName": "Dan Carlin's Hardcore History",
+      "collectionViewUrl": "https://podcasts.apple.com/us/podcast/id173001861",
+      "feedUrl": "https://feeds.example.com/hh.xml",
+      "artworkUrl100": "https://example.com/100.jpg",
+      "artworkUrl600": "https://example.com/600.jpg",
+      "collectionExplicitness": "explicit",
+      "trackCount": 70,
+      "genres": ["History", "Podcasts"],
+      "releaseDate": "2026-01-01T00:00:00Z"
+    },
+    {
+      "wrapperType": "track",
+      "kind": "podcast",
+      "trackName": "Apple-only show",
+      "artistName": "Someone",
+      "collectionExplicitness": "notExplicit"
+    }
+  ]
+}

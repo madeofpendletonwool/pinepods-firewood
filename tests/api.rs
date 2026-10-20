@@ -351,3 +351,349 @@ async fn episode_metadata_reads_the_youtube_shape() {
     assert_eq!(ep.listen_duration, Some(120));
     assert!(ep.saved && !ep.downloaded);
 }
+
+#[tokio::test]
+async fn history_asks_for_newest_first_and_keeps_youtube_apart() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/user_history/2"))
+        .and(query_param("sort_by", "date"))
+        .and(query_param("sort_order", "desc"))
+        .respond_with(ok(fixture("history")))
+        .mount(&server)
+        .await;
+
+    let history = api(&server).await.get_history().await.unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].listen_duration, Some(1312));
+    assert!(history[0].queued);
+    assert_ne!(history[0].key(), history[1].key());
+    assert_eq!(history[1].episode_duration, 0, "a NULL duration reads as 0");
+    assert!(!history[1].completed);
+}
+
+#[tokio::test]
+async fn playlists_and_their_episodes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/get_playlists"))
+        .and(query_param("user_id", "2"))
+        .respond_with(ok(fixture("playlists")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/get_playlist_episodes"))
+        .and(query_param("user_id", "2"))
+        .and(query_param("playlist_id", "3"))
+        .respond_with(ok(fixture("playlist_episodes")))
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let playlists = api.get_playlists().await.unwrap();
+    assert_eq!(playlists.len(), 2);
+    assert_eq!(playlists[0].icon_name, "ph-car");
+    assert_eq!(playlists[0].episode_count, 12);
+    assert!(playlists[0].is_system_playlist);
+    assert!(!playlists[1].is_system_playlist);
+
+    let episodes = api.get_playlist_episodes(3).await.unwrap();
+    assert_eq!(episodes.len(), 1);
+    assert_eq!(episodes[0].podcast_id, Some(4));
+    assert!(episodes[0].saved);
+}
+
+#[tokio::test]
+async fn next_playlist_episode_is_none_at_the_end() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/get_next_playlist_episode"))
+        .and(body_json(
+            json!({"episode_id": 77, "playlist_id": 3, "user_id": USER}),
+        ))
+        .respond_with(ok(json!(null)))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let next = api(&server)
+        .await
+        .get_next_playlist_episode(EPISODE, 3)
+        .await
+        .unwrap();
+    assert_eq!(next, None);
+}
+
+#[tokio::test]
+async fn collections_list_and_membership() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/collections/user/2"))
+        .respond_with(ok(fixture("collections")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/episode_collections/2/77"))
+        .and(query_param("is_youtube", "false"))
+        .respond_with(ok(json!({"collection_ids": [1, 5]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/collections/5/episodes"))
+        .respond_with(ok(json!({"saved_episodes": [], "total": 0})))
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let collections = api.get_collections().await.unwrap();
+    assert!(collections[0].is_default);
+    assert_eq!(collections[1].name, "To share");
+    assert_eq!(collections[1].episode_count, 2);
+    assert_eq!(api.get_episode_collections(EPISODE).await.unwrap(), [1, 5]);
+    assert!(api.get_collection_episodes(5).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn collection_add_and_remove_send_the_episode() {
+    let server = MockServer::start().await;
+    let body = json!({"user_id": USER, "episode_id": 77, "is_youtube": false});
+    for action in ["add_episode", "remove_episode"] {
+        Mock::given(method("POST"))
+            .and(path(format!("/api/data/collections/5/{action}")))
+            .and(body_json(body.clone()))
+            .respond_with(ok(json!({"detail": "ok"})))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+
+    let api = api(&server).await;
+    api.add_to_collection(5, EPISODE).await.unwrap();
+    api.remove_from_collection(5, EPISODE).await.unwrap();
+}
+
+#[tokio::test]
+async fn podcasting2_parses_chapters_with_string_times() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/fetch_podcasting_2_data"))
+        .and(query_param("episode_id", "77"))
+        .and(query_param("user_id", "2"))
+        .respond_with(ok(fixture("podcasting2")))
+        .mount(&server)
+        .await;
+
+    let data = api(&server).await.get_podcasting2(77).await.unwrap();
+    let starts: Vec<f64> = data.chapters.iter().map(|c| c.start).collect();
+    assert_eq!(starts, [0.0, 125.5, 1800.0]);
+    assert!(data.chapters[0].toc && !data.chapters[2].toc);
+    assert_eq!(data.transcripts[1].mime_type, "application/json");
+}
+
+#[tokio::test]
+async fn transcripts_fetched_and_failed() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/fetch_transcript"))
+        .and(body_json(json!({"url": "https://example.com/ok.vtt"})))
+        .respond_with(ok(json!({"success": true, "content": "WEBVTT"})))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/fetch_transcript"))
+        .and(body_json(json!({"url": "https://example.com/gone.vtt"})))
+        .respond_with(ok(
+            json!({"success": false, "error": "Failed to fetch transcript: 404"}),
+        ))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/episode_transcript"))
+        .and(query_param("episode_id", "77"))
+        .respond_with(ok(json!({"transcript": null})))
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    assert_eq!(
+        api.fetch_transcript("https://example.com/ok.vtt")
+            .await
+            .unwrap(),
+        "WEBVTT"
+    );
+    let err = api
+        .fetch_transcript("https://example.com/gone.vtt")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("404"), "{err}");
+    assert_eq!(api.get_generated_transcript(77).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn directory_search_reads_podcast_index_and_itunes() {
+    use pinepods_firewood::api::Directory;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/proxy_search"))
+        .and(query_param("query", "hardcore history"))
+        .and(query_param("index", "podcastindex"))
+        .respond_with(ok(fixture("podcastindex_search")))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/proxy_search"))
+        .and(query_param("index", "itunes"))
+        .respond_with(ok(fixture("itunes_search")))
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let index = api
+        .search_directory("hardcore history", Directory::PodcastIndex)
+        .await
+        .unwrap();
+    assert_eq!(index.len(), 1, "results without a feed are dropped");
+    assert_eq!(index[0].index_id, Some(75075));
+    assert_eq!(
+        index[0].categories.get("125").map(String::as_str),
+        Some("History")
+    );
+
+    let itunes = api
+        .search_directory("hardcore history", Directory::Itunes)
+        .await
+        .unwrap();
+    assert_eq!(itunes.len(), 1);
+    assert_eq!(itunes[0].title, "Dan Carlin's Hardcore History");
+    assert_eq!(itunes[0].artwork, "https://example.com/600.jpg");
+    assert!(itunes[0].explicit);
+    assert_eq!(itunes[0].index_id, None);
+}
+
+#[tokio::test]
+async fn add_podcast_sends_the_feed_with_the_user() {
+    use pinepods_firewood::api::DirectoryPodcast;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/add_podcast"))
+        .and(body_json(json!({
+            "podcast_values": {
+                "pod_title": "Show", "pod_artwork": "", "pod_author": "Me",
+                "categories": {"1": "News"}, "pod_description": "", "pod_episode_count": 3,
+                "pod_feed_url": "https://example.com/feed.xml", "pod_website": "",
+                "pod_explicit": false, "user_id": USER
+            },
+            "podcast_index_id": 42
+        })))
+        .respond_with(ok(
+            json!({"success": true, "podcast_id": 88, "first_episode_id": 0}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let podcast = DirectoryPodcast {
+        title: "Show".into(),
+        author: "Me".into(),
+        feed_url: "https://example.com/feed.xml".into(),
+        episode_count: 3,
+        categories: [("1".to_string(), "News".to_string())].into(),
+        index_id: Some(42),
+        ..Default::default()
+    };
+    assert_eq!(api(&server).await.add_podcast(&podcast).await.unwrap(), 88);
+}
+
+#[tokio::test]
+async fn youtube_search_and_subscribe() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/search_youtube_channels"))
+        .and(query_param("query", "veritasium"))
+        .and(query_param("user_id", "2"))
+        .respond_with(ok(fixture("youtube_search")))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/youtube/subscribe"))
+        .and(query_param("channel_id", "UCHnyfMqiRRG1u-2MsSQLbXA"))
+        .and(query_param("user_id", "2"))
+        .respond_with(ok(
+            json!({"success": true, "podcast_id": 90, "message": "ok"}),
+        ))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let channels = api.search_youtube("veritasium").await.unwrap();
+    assert_eq!(channels[0].name, "Veritasium");
+    assert_eq!(channels[0].recent_videos[0].title, "Why the sky is blue");
+    let id = api
+        .subscribe_youtube(&channels[0].channel_id)
+        .await
+        .unwrap();
+    assert_eq!(id, 90);
+}
+
+#[tokio::test]
+async fn unsubscribing_uses_the_id_or_the_channel() {
+    use pinepods_firewood::api::Podcast;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/remove_podcast_id"))
+        .and(body_json(json!({"user_id": USER, "podcast_id": 9})))
+        .respond_with(ok(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/data/remove_youtube_channel"))
+        .and(body_json(json!({
+            "user_id": USER, "channel_name": "Chan",
+            "channel_url": "https://www.youtube.com/channel/UC1"
+        })))
+        .respond_with(ok(json!({"success": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let api = api(&server).await;
+    let podcast = Podcast {
+        podcastid: 9,
+        ..Default::default()
+    };
+    api.remove_podcast(&podcast).await.unwrap();
+    let channel = Podcast {
+        podcastid: 10,
+        podcastname: "Chan".into(),
+        feedurl: "https://www.youtube.com/channel/UC1".into(),
+        is_youtube: true,
+        ..Default::default()
+    };
+    api.remove_podcast(&channel).await.unwrap();
+}
+
+#[tokio::test]
+async fn custom_themes_come_by_user() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/data/user/custom_themes/2"))
+        .respond_with(ok(json!({"themes": [{
+            "themeid": 1, "name": "Mine", "background_color": "#101010",
+            "button_color": "#334455", "container_button_color": "#000000",
+            "button_text_color": "#ffffff", "text_color": "#eeeeee",
+            "text_secondary_color": "#aaaaaa", "border_color": "#222222",
+            "accent_color": "#ff8800", "prog_bar_color": "#ff8800", "error_color": "#ff0000",
+            "bonus_color": "#000000", "secondary_background": "#000000",
+            "container_background": "#181818", "standout_color": "#ffaa00",
+            "hover_color": "#333333", "link_color": "#66aaff", "thumb_color": "#000000",
+            "unfilled_color": "#000000", "check_box_color": "#000000"
+        }]})))
+        .mount(&server)
+        .await;
+
+    let themes = api(&server).await.get_custom_themes().await.unwrap();
+    assert_eq!(themes[0].name, "Mine");
+    assert_eq!(themes[0].link_color, "#66aaff");
+}

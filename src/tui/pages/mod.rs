@@ -3,12 +3,15 @@
 //! of that, and Back pops them.
 
 pub mod devices;
+pub mod discover;
 pub mod episode;
 pub mod episodes;
 pub mod home;
 pub mod player;
+pub mod playlists;
 pub mod podcasts;
 pub mod queue;
+pub mod saved;
 pub mod search;
 pub mod settings;
 
@@ -114,6 +117,8 @@ pub enum Section {
     Podcasts,
     Queue,
     Saved,
+    Playlists,
+    History,
     Downloads,
     Search,
     Devices,
@@ -122,12 +127,16 @@ pub enum Section {
 }
 
 impl Section {
-    pub const ALL: [Section; 10] = [
+    /// Also the order for a new user. Digits reach the first ten, and Now Playing has
+    /// its own key (`n`), so it and Settings come last.
+    pub const ALL: [Section; 12] = [
         Self::Home,
         Self::Feed,
         Self::Podcasts,
         Self::Queue,
         Self::Saved,
+        Self::Playlists,
+        Self::History,
         Self::Downloads,
         Self::Search,
         Self::Devices,
@@ -142,6 +151,8 @@ impl Section {
             Self::Podcasts => "Podcasts",
             Self::Queue => "Queue",
             Self::Saved => "Saved",
+            Self::Playlists => "Playlists",
+            Self::History => "History",
             Self::Downloads => "Downloads",
             Self::Search => "Search",
             Self::Devices => "Devices",
@@ -165,6 +176,8 @@ impl Section {
             Self::Podcasts => "◉",
             Self::Queue => "≡",
             Self::Saved => "★",
+            Self::Playlists => "▤",
+            Self::History => "◷",
             Self::Downloads => "↓",
             Self::Search => "⌕",
             Self::Devices => "⇄",
@@ -193,7 +206,9 @@ impl Section {
             Self::Feed => Box::new(episodes::EpisodeListPage::feed()),
             Self::Podcasts => Box::new(podcasts::PodcastsPage::default()),
             Self::Queue => Box::new(queue::QueuePage::default()),
-            Self::Saved => Box::new(episodes::EpisodeListPage::saved()),
+            Self::Saved => Box::new(saved::SavedPage::default()),
+            Self::Playlists => Box::new(playlists::PlaylistsPage::default()),
+            Self::History => Box::new(episodes::EpisodeListPage::history()),
             Self::Downloads => Box::new(episodes::EpisodeListPage::downloads()),
             Self::Search => Box::new(search::SearchPage::default()),
             Self::Devices => Box::new(devices::DevicesPage::default()),
@@ -213,5 +228,33 @@ mod tests {
         let order = Section::ordered(&names);
         assert_eq!(&order[..2], &[Section::Queue, Section::Player]);
         assert_eq!(order.len(), Section::ALL.len());
+    }
+
+    #[test]
+    fn new_sections_go_after_a_saved_order() {
+        let before: Vec<String> = [
+            "Home",
+            "Feed",
+            "Podcasts",
+            "Queue",
+            "Saved",
+            "Downloads",
+            "Search",
+            "Devices",
+            "Player",
+            "Settings",
+        ]
+        .map(String::from)
+        .to_vec();
+        let order = Section::ordered(&before);
+        assert_eq!(order[9], Section::Settings);
+        assert_eq!(&order[10..], &[Section::Playlists, Section::History]);
+    }
+
+    #[test]
+    fn the_default_order_is_every_section() {
+        let names = crate::settings::AppSettings::default().ui.tab_order;
+        let order: Vec<&str> = Section::ALL.iter().map(|s| s.setting_name()).collect();
+        assert_eq!(names, order);
     }
 }

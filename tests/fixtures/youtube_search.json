@@ -1,0 +1,16 @@
+{
+  "results": [
+    {
+      "channel_id": "UCHnyfMqiRRG1u-2MsSQLbXA",
+      "name": "Veritasium",
+      "description": "An element of truth",
+      "subscriber_count": null,
+      "url": "https://www.youtube.com/channel/UCHnyfMqiRRG1u-2MsSQLbXA",
+      "video_count": null,
+      "thumbnail_url": "https://example.com/v.jpg",
+      "recent_videos": [
+        {"id": "abc", "title": "Why the sky is blue", "duration": 812.0, "url": "https://www.youtube.com/watch?v=abc"}
+      ]
+    }
+  ]
+}

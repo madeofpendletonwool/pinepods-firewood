@@ -154,6 +154,9 @@ pub enum Resource {
     Saved,
     Downloads,
     Podcasts,
+    /// Which collections hold which episodes. Saved is one, so changes to it come
+    /// with [`Resource::Saved`] too.
+    Collections,
     /// Played state and positions.
     Progress,
 }

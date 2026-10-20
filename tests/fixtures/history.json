@@ -1,0 +1,39 @@
+{
+  "data": [
+    {
+      "episodeid": 41,
+      "listendate": "2026-10-19T08:12:00",
+      "listenduration": 1312,
+      "episodetitle": "Newest play",
+      "episodedescription": null,
+      "episodeartwork": "https://example.com/a.jpg",
+      "episodeurl": "https://example.com/41.mp3",
+      "episodeduration": 3600,
+      "podcastname": "Daily News",
+      "episodepubdate": "2026-10-18T05:00:00",
+      "completed": false,
+      "saved": false,
+      "queued": true,
+      "downloaded": false,
+      "is_youtube": false
+    },
+    {
+      "episodeid": 41,
+      "listendate": null,
+      "listenduration": 95,
+      "episodetitle": "A video with the same id",
+      "episodedescription": "",
+      "episodeartwork": null,
+      "episodeurl": "https://www.youtube.com/watch?v=x",
+      "episodeduration": null,
+      "podcastname": "Some Channel",
+      "episodepubdate": null,
+      "completed": null,
+      "saved": false,
+      "queued": false,
+      "downloaded": false,
+      "is_youtube": true
+    }
+  ],
+  "total": 2
+}

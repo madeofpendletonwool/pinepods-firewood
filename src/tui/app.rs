@@ -19,13 +19,14 @@ use ratatui::{
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
+use super::collection_picker::CollectionPicker;
 use super::device_picker::DevicePicker;
 use super::keymap::{Action, Context, Keymap};
 use super::pages::{Ctx, Outcome, Page, Section};
 use super::task::{Bus, Event, Pending, Resource, Toast, ToastKind};
 use super::text::truncate;
 use super::ui::{self, list::Click};
-use crate::api::{Api, ApiResult};
+use crate::api::{Api, ApiResult, CustomTheme};
 use crate::auth::SessionInfo;
 use crate::nowplaying::{Connection, NowPlaying};
 use crate::playback::{Playback, PlaybackState, PlayerState};
@@ -58,6 +59,12 @@ pub struct App {
     bus: Bus,
     events: mpsc::UnboundedReceiver<Event>,
     server_theme: Pending<ApiResult<String>>,
+    /// The user's custom themes, fetched when the web app's theme is one of them,
+    /// with that theme's name.
+    custom_theme: Option<(String, Pending<ApiResult<Vec<CustomTheme>>>)>,
+    /// The theme setting last applied, so a custom theme isn't replaced by the
+    /// built-in one the setting still names.
+    applied_theme: String,
 
     order: Vec<Section>,
     /// One stack of pages per section, in [`Section::ALL`] order.
@@ -69,6 +76,7 @@ pub struct App {
     flash: Option<(String, Instant)>,
     help: Option<u16>,
     picker: Option<DevicePicker>,
+    collections: Option<CollectionPicker>,
     /// The last remote-control notice already shown, so each shows once.
     notice_seen: Option<Instant>,
     quit: bool,
@@ -125,6 +133,8 @@ impl App {
             bus,
             events,
             server_theme,
+            custom_theme: None,
+            applied_theme: settings.theme_name().to_string(),
             stacks: Section::ALL.iter().map(|s| vec![s.root()]).collect(),
             order,
             current,
@@ -138,6 +148,7 @@ impl App {
             flash: None,
             help: None,
             picker: None,
+            collections: None,
             notice_seen: None,
             quit: false,
             sidebar_rows: Vec::new(),
@@ -225,8 +236,12 @@ impl App {
             self.flash = None;
         }
 
+        if let Some(picker) = &mut self.collections {
+            picker.tick(&self.bus);
+        }
         self.show_remote_notice();
         self.apply_server_theme();
+        self.apply_custom_theme();
         self.apply_settings();
 
         self.with_page(|page, cx| {
@@ -273,16 +288,55 @@ impl App {
                     tracing::warn!("couldn't save the theme: {e:#}");
                 }
             }
-            // A custom theme from the web app; Firewood only has the built-in ones.
-            Ok(name) => tracing::info!("the web app's theme {name:?} isn't built in; keeping ours"),
+            // One the user made in the web app.
+            Ok(name) => {
+                let api = self.api.clone();
+                self.custom_theme = Some((
+                    name,
+                    Pending::spawn(async move { api.get_custom_themes().await }),
+                ));
+            }
             Err(e) => tracing::warn!("couldn't fetch the theme: {e}"),
+        }
+    }
+
+    fn apply_custom_theme(&mut self) {
+        let Some((name, pending)) = &mut self.custom_theme else {
+            return;
+        };
+        let Some(result) = pending.poll() else {
+            return;
+        };
+        let name = name.clone();
+        self.custom_theme = None;
+        let themes = match result {
+            Ok(themes) => themes,
+            Err(e) => {
+                tracing::warn!("couldn't fetch custom themes: {e}");
+                return;
+            }
+        };
+        let theme = themes
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| Theme::from_custom(t, self.depth));
+        match theme {
+            // Picked in Settings while this was loading.
+            Some(_) if !self.settings.get().theme.follow_server => {}
+            Some(theme) => self.theme = theme,
+            None => tracing::info!("the web app's theme {name:?} isn't one Firewood can show"),
         }
     }
 
     /// Picks up settings the Settings page changed.
     fn apply_settings(&mut self) {
         let name = self.settings.theme_name();
-        if !name.eq_ignore_ascii_case(&self.theme.name) && Theme::exists(name) {
+        // A custom theme from the web app shows until the setting changes, or until
+        // the user picks a theme here (which stops following the web app).
+        let picked_here = !self.settings.get().theme.follow_server
+            && !name.eq_ignore_ascii_case(&self.theme.name);
+        if (picked_here || !name.eq_ignore_ascii_case(&self.applied_theme)) && Theme::exists(name) {
+            self.applied_theme = name.to_string();
             self.theme = Theme::named(name, self.depth);
         }
         let order = Section::ordered(&self.settings.get().ui.tab_order);
@@ -353,6 +407,10 @@ impl App {
         }
         if self.picker.is_some() {
             self.picker_key(key);
+            return;
+        }
+        if self.collections.is_some() {
+            self.collections_key(key);
             return;
         }
 
@@ -433,6 +491,15 @@ impl App {
             }
             Action::PlayOn => {
                 self.open_picker();
+                Ok(())
+            }
+            Action::AddToCollection => {
+                match self.page().selected_episode() {
+                    Some(episode) => {
+                        self.collections = Some(CollectionPicker::new(episode, &self.api));
+                    }
+                    None => self.bus.info("Select an episode first"),
+                }
                 Ok(())
             }
             Action::TogglePlay if has_episode => self.playback.toggle_play_pause(),
@@ -522,6 +589,19 @@ impl App {
         }
     }
 
+    fn collections_key(&mut self, key: KeyEvent) {
+        let Some(picker) = &mut self.collections else {
+            return;
+        };
+        let action = self.keymap.action(key.into(), &[Context::List]);
+        match (key.code, action) {
+            (KeyCode::Esc, _) | (_, Some(Action::Back | Action::Quit)) => self.collections = None,
+            (KeyCode::Enter | KeyCode::Char(' '), _) => picker.toggle(&self.api, &self.bus),
+            (_, Some(action)) => picker.navigate(action),
+            _ => {}
+        }
+    }
+
     fn play_on_selected(&mut self) {
         let Some(picker) = self.picker.take() else {
             return;
@@ -550,6 +630,14 @@ impl App {
             match picker.mouse(event) {
                 Click::Activated => self.play_on_selected(),
                 Click::Missed if click => self.picker = None,
+                _ => {}
+            }
+            return;
+        }
+        if let Some(picker) = &mut self.collections {
+            match picker.mouse(event) {
+                Click::Activated => picker.toggle(&self.api, &self.bus),
+                Click::Missed if click => self.collections = None,
                 _ => {}
             }
             return;
@@ -628,6 +716,9 @@ impl App {
             let devices = self.remote.state().devices;
             picker.sync(&devices);
             picker.render(frame, area, &self.theme, &devices);
+        }
+        if let Some(picker) = &mut self.collections {
+            picker.render(frame, area, &self.theme);
         }
         if self.help.is_some() {
             self.render_help(frame, area);

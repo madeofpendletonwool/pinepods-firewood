@@ -35,9 +35,27 @@ pub enum Context {
     Queue,
     Player,
     Devices,
+    /// A podcast you follow, in a list or open.
+    Podcast,
+    /// Podcasts from the directories, in Search.
+    Discover,
+    /// An episode's notes, chapters and transcript.
+    Details,
 }
 
 impl Context {
+    pub const ALL: [Context; 9] = [
+        Self::Global,
+        Self::List,
+        Self::Episode,
+        Self::Podcast,
+        Self::Details,
+        Self::Queue,
+        Self::Player,
+        Self::Discover,
+        Self::Devices,
+    ];
+
     pub fn title(self) -> &'static str {
         match self {
             Self::Global => "Everywhere",
@@ -46,6 +64,9 @@ impl Context {
             Self::Queue => "Queue",
             Self::Player => "Now playing",
             Self::Devices => "Devices",
+            Self::Podcast => "Podcasts",
+            Self::Discover => "Discover",
+            Self::Details => "Notes, chapters and transcript",
         }
     }
 }
@@ -86,6 +107,13 @@ pub enum Action {
     Save,
     Download,
     MarkPlayed,
+    AddToCollection,
+    // Podcast
+    Unsubscribe,
+    // Discover
+    Subscribe,
+    // Details
+    CycleView,
     // Queue
     MoveUp,
     MoveDown,
@@ -98,6 +126,8 @@ pub enum Action {
     Stop,
     ResetSpeed,
     TrimSilence,
+    NextChapter,
+    PrevChapter,
     // Devices
     PlayHere,
     SendHere,
@@ -141,6 +171,10 @@ impl Action {
             Self::Save => "Save/unsave",
             Self::Download => "Download/delete on server",
             Self::MarkPlayed => "Mark played/unplayed",
+            Self::AddToCollection => "Add to a collection",
+            Self::Unsubscribe => "Unsubscribe",
+            Self::Subscribe => "Subscribe",
+            Self::CycleView => "Notes/chapters/transcript",
             Self::MoveUp => "Move up",
             Self::MoveDown => "Move down",
             Self::MoveToTop => "Move to top",
@@ -151,6 +185,8 @@ impl Action {
             Self::Stop => "Stop",
             Self::ResetSpeed => "Normal speed",
             Self::TrimSilence => "Trim silence on/off",
+            Self::NextChapter => "Next chapter",
+            Self::PrevChapter => "Previous chapter",
             Self::PlayHere => "Play here",
             Self::SendHere => "Send playback there",
             Self::RemoteToggle => "Play/pause there",
@@ -194,6 +230,10 @@ const DEFAULTS: &[(Context, Action, &[&str])] = &[
     (Context::Episode, Action::Download, &["d"]),
     (Context::Episode, Action::MarkPlayed, &["m"]),
     (Context::Episode, Action::PlayOn, &["o"]),
+    (Context::Episode, Action::AddToCollection, &["c"]),
+    (Context::Podcast, Action::Unsubscribe, &["U"]),
+    (Context::Discover, Action::Subscribe, &["s"]),
+    (Context::Details, Action::CycleView, &["v"]),
     (Context::Queue, Action::MoveUp, &["K", "shift+up"]),
     (Context::Queue, Action::MoveDown, &["J", "shift+down"]),
     (Context::Queue, Action::MoveToTop, &["t"]),
@@ -206,6 +246,8 @@ const DEFAULTS: &[(Context, Action, &[&str])] = &[
     (Context::Player, Action::TrimSilence, &["t"]),
     (Context::Player, Action::VolumeUp, &["+", "up"]),
     (Context::Player, Action::VolumeDown, &["-", "down"]),
+    (Context::Player, Action::NextChapter, &["."]),
+    (Context::Player, Action::PrevChapter, &[","]),
     (Context::Devices, Action::PlayHere, &["enter"]),
     (Context::Devices, Action::SendHere, &["s"]),
     (Context::Devices, Action::RemoteToggle, &["p"]),

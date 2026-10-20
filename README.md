@@ -8,7 +8,8 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 
 ### 🖥️ **Terminal User Interface**
 - **Sidebar layout**: every page one key away, with a now-playing bar and the keys for the page you're on always on screen
-- **Pages**: Home, Feed, Podcasts, Queue, Saved, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes
+- **Pages**: Home, Feed, Podcasts, Queue, Saved (with your collections), Playlists, History, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes, chapters and transcripts
+- **Find and follow podcasts**: search Podcast Index, iTunes and YouTube and subscribe from the terminal
 - **Filter as you type**: `/` narrows any list; Search queries your server as you type
 - **Themes**: the same 25 themes as the PinePods web app, starting with the one you picked there, or your terminal's own colors
 - **Keys you can change**: vim-style and arrow keys by default, `?` lists them, `keymap.toml` rebinds them
@@ -21,7 +22,8 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Playback Controls**: Play/pause, skip forward/backward, seek, volume
 - **Speed**: 0.5× to 3× without changing pitch, starting from each podcast's speed setting in PinePods
 - **Skips**: Jumps over ads and silence PinePods has detected (silence follows the podcast's trim-silence setting), and over a podcast's intro and outro skip times
-- **Queue**: When an episode ends it's marked played and the next one in your queue starts
+- **Queue**: When an episode ends it's marked played and the next one in your queue starts. Started from a playlist, the playlist's next episode plays instead, until it runs out
+- **Chapters and transcripts**: Now Playing lists an episode's chapters and follows along in its transcript; Enter jumps to a chapter or line
 - **Progress Tracking**: Resumes where you left off and saves your position to the server while you listen
 - **Reconnects**: Rides out short network drops and picks up where you were
 - **Formats**: MP3, AAC/M4A, FLAC, Ogg Vorbis and WAV
@@ -108,26 +110,31 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 ### Playing
 - **Space** play/pause, **←/→** skip back/forward (15 s by default; change it in Settings)
 - **[ / ]** slower/faster (0.5× to 3×, pitch stays the same), **+/-** volume
-- **n** opens Now Playing, which adds **=** for normal speed, **t** to toggle trimming silence for the podcast and **x** to stop
+- **n** opens Now Playing, which adds **=** for normal speed, **t** to toggle trimming silence for the podcast, **x** to stop, and **.** / **,** for the next and previous chapter
+- **v** on Now Playing or an episode's details switches between its show notes, chapters and transcript, where there are any. **Enter** on a chapter or a line of the transcript jumps there
 
 ### On any episode
 - **a** add to or remove from the queue, **A** play next
 - **s** save/unsave, **d** have the server download it (or delete its copy), **m** mark played/unplayed
 - **o** play it on another of your devices
+- **c** add it to (or take it out of) one of your collections
 
 ### Pages
 - **Home**: where you left off, new episodes and your most-played podcasts
 - **Feed**: recent episodes from every subscription. **f** cycles All / Unplayed / In progress / Played
-- **Podcasts**: your subscriptions; **Enter** lists a podcast's episodes
+- **Podcasts**: your subscriptions; **Enter** lists a podcast's episodes. **U** twice unsubscribes (from the list or the podcast's page)
 - **Queue**: **K/J** move an episode up/down, **t/b** to the top/bottom, **x** remove, **S** shuffle, **C** twice to clear
-- **Saved** and **Downloads**: episodes you've saved, and the ones your server has a copy of
-- **Search**: episodes from the podcasts you follow
+- **Saved**: episodes you've saved. If you've made other collections in the web app, this lists them, with Saved first
+- **Playlists**: the web app's playlists, smart ones included. Playing an episode from one carries on through the playlist
+- **History**: what you've played, newest first
+- **Downloads**: the episodes your server has a copy of, by podcast
+- **Search**: episodes from the podcasts you follow, as you type. **f** switches to finding new podcasts on Podcast Index, iTunes or YouTube: type a name, press **Enter**, then **s** subscribes (or **Enter** shows more about one first)
 - **Devices**: your other players (see [Remote Control](#-remote-control))
 - **Settings**: theme, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
 
 ### Themes
 Firewood starts with the theme you picked in the PinePods web app, so a change there
-shows up the next time it opens. Picking a theme in Settings stops that. The **Terminal** theme
+shows up the next time it opens. That includes themes you made yourself there. Picking a theme in Settings stops that. The **Terminal** theme
 uses your terminal's own colors. Firewood uses 24-bit color where the terminal says it
 supports it and the nearest 256-color match elsewhere; `FIREWOOD_COLOR=truecolor` or
 `FIREWOOD_COLOR=256` overrides the guess.
