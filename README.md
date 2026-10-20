@@ -11,6 +11,7 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 - **Pages**: Home, Feed, Podcasts, Queue, Saved (with your collections), Playlists, History, Downloads, Search, Devices, Now Playing and Settings, plus episode details with show notes, chapters and transcripts
 - **Find and follow podcasts**: search Podcast Index, iTunes and YouTube and subscribe from the terminal
 - **Filter as you type**: `/` narrows any list; Search queries your server as you type
+- **Cover art**: on Now Playing, an episode's details and the now-playing bar, as real images in terminals with the kitty, sixel or iTerm2 graphics protocols and in blocks of color elsewhere (turn it off in Settings)
 - **Command palette**: `:` or Ctrl+P finds any command, page, podcast or loaded episode by a few letters of its name
 - **Themes**: the same 25 themes as the PinePods web app, starting with the one you picked there, or your terminal's own colors
 - **Keys you can change**: vim-style and arrow keys by default, `?` lists them, `keymap.toml` rebinds them
@@ -132,7 +133,7 @@ Every key you type goes into the fields, so **Ctrl+C** quits the login screen. *
 - **Downloads**: the episodes your server has a copy of, by podcast
 - **Search**: episodes from the podcasts you follow, as you type. **f** switches to finding new podcasts on Podcast Index, iTunes or YouTube: type a name, press **Enter**, then **s** subscribes (or **Enter** shows more about one first)
 - **Devices**: your other players (see [Remote Control](#-remote-control))
-- **Settings**: theme, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
+- **Settings**: theme, cover art, starting volume, skip length, audio output, the name other devices see, sidebar order, and the key bindings and log files
 
 ### Themes
 Firewood starts with the theme you picked in the PinePods web app, so a change there
@@ -161,12 +162,23 @@ Clicking selects, clicking the selected row again plays or opens it, and the whe
 scrolls. With the mouse on, selecting text in most terminals needs Shift (Option in
 some macOS terminals) held down; `FIREWOOD_NO_MOUSE=1` turns it off.
 
+### Cover art
+Firewood asks the terminal at startup which image protocol it speaks: kitty (kitty,
+Ghostty), sixel (foot, Konsole, xterm started with `-ti vt340`) or iTerm2 (iTerm2,
+WezTerm). Anywhere else covers are drawn in half-block characters. Inside tmux,
+images need `set -g allow-passthrough on`; if detection still guesses wrong, set
+`FIREWOOD_GRAPHICS` to `kitty`, `sixel`, `iterm2` or `blocks`. Covers come through
+your server's image proxy and are cached under the platform's cache directory
+(`~/Library/Caches/pinepods-firewood/art` on macOS, `~/.cache/pinepods-firewood/art`
+on Linux), trimmed to 64 MB.
+
 ## 🔧 Development
 
 ### Project Structure
 ```
 src/
 ├── api/           # Typed PinePods API client
+├── art/           # Cover art: fetching, caching, decoding
 ├── audio/         # Audio output thread
 ├── auth/          # Login flow and saved session
 ├── nowplaying/    # Remote control over the server's now-playing socket
@@ -255,7 +267,7 @@ This project is licensed under the GNU General Public License v3.0; see the [LIC
 - [x] Chapters and transcripts
 - [x] Podcast discovery and subscribing
 - [x] A command palette
-- [ ] Cover art in terminals that can show images
+- [x] Cover art in terminals that can show images
 - [ ] Media keys and the system's now-playing controls (MPRIS on Linux, Now Playing on macOS)
 - [ ] Headless mode, for a Raspberry Pi or speaker box that other devices play on
 

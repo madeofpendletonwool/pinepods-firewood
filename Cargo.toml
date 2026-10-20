@@ -18,9 +18,11 @@ dirs = "7.0.0"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 getrandom = "0.3.4"
 html2text = "0.17.4"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 keyring = "4.2.0"
 nucleo-matcher = "0.3.1"
 ratatui = { version = "0.30.2", features = ["serde"] }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 reqwest = { version = "0.13.5", features = ["json", "query", "gzip"] }
 rodio = { version = "0.23.0", default-features = false, features = ["playback", "mp3", "mp4", "flac", "vorbis", "wav"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws-lc-rs", "std", "tls12"] }

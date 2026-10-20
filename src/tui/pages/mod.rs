@@ -23,6 +23,7 @@ use ratatui::{
 
 use super::keymap::{Action, Context, Keymap};
 use super::task::{Bus, Resource};
+use super::ui::cover::Covers;
 use crate::api::{Api, Episode, Podcast};
 use crate::nowplaying::NowPlaying;
 use crate::playback::{Playback, PlayerState};
@@ -42,6 +43,7 @@ pub struct Ctx<'a> {
     pub settings: &'a mut SettingsManager,
     /// `user on server`, for Settings.
     pub account: &'a str,
+    pub covers: &'a Covers,
 }
 
 /// What handling an input led to.

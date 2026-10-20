@@ -18,6 +18,7 @@ use crate::playback::{PlaybackState, PlayerState};
 use crate::theme::Theme;
 use crate::tui::keymap::{Action, Context};
 use crate::tui::text::truncate;
+use crate::tui::ui::cover::CoverView;
 use crate::tui::ui::details::{self, Details};
 use crate::tui::ui::{self, clock};
 
@@ -28,6 +29,7 @@ const VOLUME_STEP: f32 = 0.05;
 #[derive(Default)]
 pub struct PlayerPage {
     details: Details,
+    cover: CoverView,
     /// Clickable parts, from the last frame.
     progress_area: Rect,
     buttons: [Rect; 3],
@@ -243,11 +245,32 @@ impl Page for PlayerPage {
             return;
         };
 
-        let width = area.width.min(90);
+        // The cover goes beside the title and controls, given room for both.
+        let with_cover = cx.settings.cover_art() && area.width >= 64 && area.height >= 18;
+        let width = area.width.min(if with_cover { 110 } else { 90 });
         let column = Rect {
             x: area.x + (area.width - width) / 2,
             width,
             ..area
+        };
+        let [top, _, notes_area] = Layout::vertical([
+            Constraint::Length(10),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(column);
+        let top = if with_cover {
+            let [cover, _, info] = Layout::horizontal([
+                Constraint::Length(20),
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .areas(top);
+            self.cover
+                .render(frame, cover, &episode.episode_artwork, cx.covers, theme);
+            info
+        } else {
+            top
         };
         let [
             title,
@@ -260,23 +283,7 @@ impl Page for PlayerPage {
             _,
             settings,
             status,
-            _,
-            notes_area,
-        ] = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .areas(column);
+        ] = Layout::vertical([Constraint::Length(1); 10]).areas(top);
 
         frame.render_widget(
             Paragraph::new(Span::styled(

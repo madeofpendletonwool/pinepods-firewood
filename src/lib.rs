@@ -1,4 +1,5 @@
 pub mod api;
+pub mod art;
 pub mod audio;
 pub mod auth;
 pub mod nowplaying;

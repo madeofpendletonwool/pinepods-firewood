@@ -9,12 +9,14 @@ use ratatui::crossterm::event::{
     Event, KeyCode, KeyEventKind, KeyModifiers,
 };
 use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{Clear, ClearType};
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 
 use pinepods_firewood::api::http::{build_client, build_media_client};
 use pinepods_firewood::api::{HttpApi, PinepodsApi};
+use pinepods_firewood::art::Artwork;
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
 use pinepods_firewood::nowplaying::{self, NowPlaying};
 use pinepods_firewood::paths;
@@ -22,6 +24,8 @@ use pinepods_firewood::playback::{Playback, PlaybackConfig};
 use pinepods_firewood::settings::SettingsManager;
 use pinepods_firewood::stderr::StderrRedirect;
 use pinepods_firewood::tui::App;
+use pinepods_firewood::tui::ui::cover::{self, Covers};
+use ratatui_image::picker::Picker;
 
 const LOG_FILES_KEPT: usize = 7;
 
@@ -67,6 +71,10 @@ async fn main() -> Result<()> {
 
     // Installs a panic hook of its own that restores the terminal before ours runs.
     let mut terminal = ratatui::try_init()?;
+    // The terminal answers on stdin, so ask before anything else reads it.
+    let picker = cover::detect();
+    // A terminal that doesn't understand a query may have printed it.
+    execute!(std::io::stdout(), Clear(ClearType::All))?;
     // Mouse capture means selecting text needs Shift (Option in some macOS
     // terminals), so it can be turned off.
     let mouse = std::env::var_os("FIREWOOD_NO_MOUSE").is_none();
@@ -75,7 +83,7 @@ async fn main() -> Result<()> {
     }
     execute!(std::io::stdout(), EnableBracketedPaste)?;
     let stderr = StderrRedirect::to_file(&log_dir.join("stderr.log"));
-    let result = run(&mut terminal).await;
+    let result = run(&mut terminal, picker).await;
     drop(stderr);
     let _ = execute!(
         std::io::stdout(),
@@ -90,7 +98,7 @@ async fn main() -> Result<()> {
     result
 }
 
-async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
+async fn run(terminal: &mut DefaultTerminal, picker: Picker) -> Result<()> {
     let Some(session) = authenticate(terminal).await? else {
         return Ok(());
     };
@@ -127,7 +135,15 @@ async fn run(terminal: &mut DefaultTerminal) -> Result<()> {
         playback.clone(),
     );
 
-    let app = App::new(&session, api, playback.clone(), remote.clone(), settings);
+    let covers = Covers::new(Artwork::new(build_client()?, &auth.server_name), picker);
+    let app = App::new(
+        &session,
+        api,
+        playback.clone(),
+        remote.clone(),
+        settings,
+        covers,
+    );
     let terminated = Arc::new(AtomicBool::new(false));
     watch_for_termination(terminated.clone(), playback.clone(), remote.clone());
     let result = run_main_app(terminal, app, &terminated).await;
@@ -176,7 +192,7 @@ async fn run_main_app(
     while !terminated.load(Ordering::Relaxed) && !app.should_quit() {
         if Instant::now() >= next_frame {
             app.tick();
-            terminal.draw(|f| app.render(f))?;
+            draw(terminal, &mut app)?;
             next_frame = Instant::now() + FRAME;
         }
         // Waiting here blocks this worker thread; the runtime has others for the
@@ -196,8 +212,21 @@ async fn run_main_app(
         // Show the effect of input without waiting for the next frame.
         if Instant::now() + Duration::from_millis(10) < next_frame {
             app.tick();
-            terminal.draw(|f| app.render(f))?;
+            draw(terminal, &mut app)?;
         }
+    }
+    Ok(())
+}
+
+fn draw(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    terminal.draw(|f| app.render(f))?;
+    if app.take_repaint() {
+        // Everything again, not just what changed. `Terminal::clear` would do this
+        // too, but it first asks the terminal where the cursor is and waits for the
+        // answer.
+        execute!(terminal.backend_mut(), Clear(ClearType::All))?;
+        terminal.swap_buffers();
+        terminal.draw(|f| app.render(f))?;
     }
     Ok(())
 }

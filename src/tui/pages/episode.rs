@@ -14,6 +14,7 @@ use super::{Ctx, Outcome, Page};
 use crate::api::Episode;
 use crate::tui::keymap::{Action, Context};
 use crate::tui::task::{Remote, Resource};
+use crate::tui::ui::cover::CoverView;
 use crate::tui::ui::details::{self, Details};
 use crate::tui::ui::{self, episodes};
 
@@ -22,6 +23,7 @@ pub struct EpisodePage {
     /// The full record, fetched when the list's copy has no description.
     full: Remote<Episode>,
     details: Details,
+    cover: CoverView,
 }
 
 impl EpisodePage {
@@ -30,6 +32,7 @@ impl EpisodePage {
             episode,
             full: Remote::default(),
             details: Details::default(),
+            cover: CoverView::default(),
         }
     }
 }
@@ -149,12 +152,27 @@ impl Page for EpisodePage {
     fn render(&mut self, frame: &mut Frame, area: Rect, cx: &Ctx) {
         let theme = cx.theme;
         let e = &self.episode;
+        let with_cover =
+            cx.settings.cover_art() && !e.episode_artwork.is_empty() && area.width >= 50;
         let [head, _, notes_area] = Layout::vertical([
-            Constraint::Length(4),
+            Constraint::Length(if with_cover { 6 } else { 4 }),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
         .areas(area);
+        let head = if with_cover {
+            let [cover, _, text] = Layout::horizontal([
+                Constraint::Length(12),
+                Constraint::Length(2),
+                Constraint::Min(0),
+            ])
+            .areas(head);
+            self.cover
+                .render(frame, cover, &e.episode_artwork, cx.covers, theme);
+            text
+        } else {
+            head
+        };
 
         let mut facts = vec![Span::styled(
             ui::date(&e.episode_pub_date, ui::today()),

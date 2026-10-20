@@ -28,6 +28,7 @@ use super::pages::{Ctx, Outcome, Page, Section};
 use super::palette::{self, Command, Palette};
 use super::task::{Bus, Event, Pending, Resource, Toast, ToastKind};
 use super::text::truncate;
+use super::ui::cover::{CoverView, Covers};
 use super::ui::{self, list::Click};
 use crate::api::{Api, ApiResult, CustomTheme};
 use crate::auth::SessionInfo;
@@ -56,6 +57,12 @@ pub struct App {
     remote: NowPlaying,
     settings: SettingsManager,
     account: String,
+    covers: Covers,
+    nowbar_cover: CoverView,
+    /// Whether an overlay was up last frame, and whether the screen needs repainting
+    /// from scratch because one came or went over a cover.
+    overlay_shown: bool,
+    repaint: bool,
 
     theme: Theme,
     depth: ColorDepth,
@@ -103,6 +110,7 @@ impl App {
         playback: Playback,
         remote: NowPlaying,
         settings: SettingsManager,
+        covers: Covers,
     ) -> Self {
         let auth = &session.auth_state;
         let user = auth
@@ -151,6 +159,10 @@ impl App {
             remote,
             settings,
             account: format!("{user} on {server}"),
+            covers,
+            nowbar_cover: CoverView::default(),
+            overlay_shown: false,
+            repaint: false,
             toasts: Vec::new(),
             flash: None,
             help: None,
@@ -172,6 +184,12 @@ impl App {
 
     pub fn should_quit(&self) -> bool {
         self.quit
+    }
+
+    /// The whole screen must be drawn again, not just what changed: an overlay
+    /// came or went over a cover that the terminal won't redraw on its own.
+    pub fn take_repaint(&mut self) -> bool {
+        std::mem::take(&mut self.repaint)
     }
 
     fn stack(&self, section: Section) -> &Vec<Box<dyn Page>> {
@@ -210,6 +228,7 @@ impl App {
             player: &self.player,
             settings: &mut self.settings,
             account: &self.account,
+            covers: &self.covers,
         };
         f(page.as_mut(), &mut cx)
     }
@@ -393,6 +412,7 @@ impl App {
                     player: &self.player,
                     settings: &mut self.settings,
                     account: &self.account,
+                    covers: &self.covers,
                 };
                 page.show(&cx);
                 self.stack_mut(self.current).push(page);
@@ -833,6 +853,14 @@ impl App {
         if self.help.is_some() {
             self.render_help(frame, area);
         }
+        let overlay = self.help.is_some()
+            || self.picker.is_some()
+            || self.collections.is_some()
+            || self.palette.is_some();
+        if overlay != self.overlay_shown && self.covers.leaves_traces() {
+            self.repaint = true;
+        }
+        self.overlay_shown = overlay;
     }
 
     fn render_sidebar(&mut self, frame: &mut Frame, area: Rect, compact: bool) {
@@ -987,6 +1015,24 @@ impl App {
                 inner,
             );
             return;
+        };
+        // A small cover, where the terminal can draw a real image; in blocks of
+        // color it would be a smudge.
+        let inner = if self.settings.cover_art()
+            && self.covers.has_graphics()
+            && !episode.episode_artwork.is_empty()
+        {
+            let [cover, _, rest] = Layout::horizontal([
+                Constraint::Length(4),
+                Constraint::Length(1),
+                Constraint::Min(0),
+            ])
+            .areas(inner);
+            self.nowbar_cover
+                .render(frame, cover, &episode.episode_artwork, &self.covers, theme);
+            rest
+        } else {
+            inner
         };
         let [top, bottom] =
             Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).areas(inner);
