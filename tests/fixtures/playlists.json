@@ -1,0 +1,35 @@
+{
+  "playlists": [
+    {
+      "playlist_id": 3,
+      "user_id": 2,
+      "name": "Commuter Mix",
+      "description": "Perfect-length episodes (15-45 minutes) for your daily commute",
+      "is_system_playlist": true,
+      "podcast_ids": null,
+      "include_unplayed": true,
+      "include_partially_played": true,
+      "include_played": false,
+      "min_duration": 900,
+      "max_duration": 2700,
+      "sort_order": "date_desc",
+      "group_by_podcast": false,
+      "max_episodes": null,
+      "last_updated": "2026-10-19T00:00:00",
+      "created": "2026-01-01T00:00:00",
+      "icon_name": "ph-car",
+      "episode_count": 12,
+      "preview_episodes": [{"title": "One", "artwork": ""}]
+    },
+    {
+      "playlist_id": 9,
+      "user_id": 2,
+      "name": "Mine",
+      "description": "",
+      "is_system_playlist": false,
+      "icon_name": "",
+      "episode_count": 0,
+      "preview_episodes": []
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "chapters": [
+    {"startTime": 0, "title": "Intro"},
+    {"startTime": 125.5, "title": "The news", "img": "https://example.com/c.jpg", "url": "https://example.com"},
+    {"startTime": "1800", "title": "Hidden", "toc": false}
+  ],
+  "transcripts": [
+    {"url": "https://example.com/t.srt", "mime_type": "application/srt", "language": "en", "rel": null},
+    {"url": "https://example.com/t.json", "mime_type": "application/json", "language": null, "rel": "captions"}
+  ],
+  "people": []
+}

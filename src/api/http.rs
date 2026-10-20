@@ -11,6 +11,14 @@ use super::{ApiError, ApiResult, PinepodsApi};
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// How much of a long list to ask for. History and playlists are capped at 200 by
+/// the server.
+const HISTORY_LIMIT: usize = 200;
+const PLAYLIST_LIMIT: usize = 200;
+const COLLECTION_LIMIT: usize = 500;
+/// The server runs yt-dlp for each search, so keep it to a screenful.
+const YOUTUBE_RESULTS: usize = 10;
+
 /// Builds the HTTP client every part of Firewood shares, so TLS setup and timeouts
 /// live in one place.
 pub fn build_client() -> reqwest::Result<Client> {
@@ -413,6 +421,244 @@ impl PinepodsApi for HttpApi {
             Some(&self.action(episode)),
         )
         .await
+    }
+
+    async fn get_history(&self) -> ApiResult<Vec<Episode>> {
+        let query = [
+            ("limit", HISTORY_LIMIT.to_string()),
+            ("sort_by", "date".to_string()),
+            ("sort_order", "desc".to_string()),
+        ];
+        let r: DataEnvelope<Episode> = self
+            .get(&format!("/api/data/user_history/{}", self.user_id), &query)
+            .await?;
+        Ok(r.data)
+    }
+
+    async fn get_playlists(&self) -> ApiResult<Vec<Playlist>> {
+        let r: PlaylistsEnvelope = self
+            .get(
+                "/api/data/get_playlists",
+                &[("user_id", self.user_id.to_string())],
+            )
+            .await?;
+        Ok(r.playlists)
+    }
+
+    async fn get_playlist_episodes(&self, playlist_id: i64) -> ApiResult<Vec<Episode>> {
+        let query = [
+            ("user_id", self.user_id.to_string()),
+            ("playlist_id", playlist_id.to_string()),
+            ("limit", PLAYLIST_LIMIT.to_string()),
+        ];
+        let r: EpisodesEnvelope = self.get("/api/data/get_playlist_episodes", &query).await?;
+        Ok(r.episodes)
+    }
+
+    async fn get_next_playlist_episode(
+        &self,
+        episode: EpisodeKey,
+        playlist_id: i64,
+    ) -> ApiResult<Option<Episode>> {
+        let body = NextPlaylistEpisodeRequest {
+            episode_id: episode.episode_id,
+            playlist_id,
+            user_id: self.user_id,
+        };
+        self.post("/api/data/get_next_playlist_episode", &body)
+            .await
+    }
+
+    async fn get_collections(&self) -> ApiResult<Vec<Collection>> {
+        let r: CollectionsEnvelope = self
+            .get(&format!("/api/data/collections/user/{}", self.user_id), &[])
+            .await?;
+        Ok(r.collections)
+    }
+
+    async fn get_collection_episodes(&self, collection_id: i64) -> ApiResult<Vec<Episode>> {
+        let r: SavedEnvelope = self
+            .get(
+                &format!("/api/data/collections/{collection_id}/episodes"),
+                &[("limit", COLLECTION_LIMIT.to_string())],
+            )
+            .await?;
+        Ok(r.saved_episodes)
+    }
+
+    async fn get_episode_collections(&self, episode: EpisodeKey) -> ApiResult<Vec<i64>> {
+        let r: EpisodeCollectionsEnvelope = self
+            .get(
+                &format!(
+                    "/api/data/episode_collections/{}/{}",
+                    self.user_id, episode.episode_id
+                ),
+                &[("is_youtube", episode.is_youtube.to_string())],
+            )
+            .await?;
+        Ok(r.collection_ids)
+    }
+
+    async fn add_to_collection(&self, collection_id: i64, episode: EpisodeKey) -> ApiResult<()> {
+        let body = CollectionEpisodeRequest {
+            user_id: self.user_id,
+            episode_id: episode.episode_id,
+            is_youtube: episode.is_youtube,
+        };
+        let path = format!("/api/data/collections/{collection_id}/add_episode");
+        self.call(Method::POST, &path, Some(&body)).await
+    }
+
+    async fn remove_from_collection(
+        &self,
+        collection_id: i64,
+        episode: EpisodeKey,
+    ) -> ApiResult<()> {
+        let body = CollectionEpisodeRequest {
+            user_id: self.user_id,
+            episode_id: episode.episode_id,
+            is_youtube: episode.is_youtube,
+        };
+        let path = format!("/api/data/collections/{collection_id}/remove_episode");
+        self.call(Method::POST, &path, Some(&body)).await
+    }
+
+    async fn get_podcasting2(&self, episode_id: i64) -> ApiResult<Podcasting2> {
+        self.get(
+            "/api/data/fetch_podcasting_2_data",
+            &[
+                ("episode_id", episode_id.to_string()),
+                ("user_id", self.user_id.to_string()),
+            ],
+        )
+        .await
+    }
+
+    async fn fetch_transcript(&self, url: &str) -> ApiResult<String> {
+        let path = "/api/data/fetch_transcript";
+        let r: FetchedTranscript = self.post(path, &TranscriptRequest { url }).await?;
+        match (r.success, r.content) {
+            (true, Some(content)) => Ok(content),
+            _ => Err(ApiError::Status {
+                endpoint: path.to_string(),
+                // The server answers 200 and says what went wrong fetching the file.
+                status: 502,
+                message: r
+                    .error
+                    .unwrap_or_else(|| "the transcript couldn't be fetched".into()),
+            }),
+        }
+    }
+
+    async fn get_generated_transcript(
+        &self,
+        episode_id: i64,
+    ) -> ApiResult<Option<StoredTranscript>> {
+        let r: StoredTranscriptEnvelope = self
+            .get(
+                "/api/data/episode_transcript",
+                &[
+                    ("episode_id", episode_id.to_string()),
+                    ("user_id", self.user_id.to_string()),
+                ],
+            )
+            .await?;
+        Ok(r.transcript)
+    }
+
+    async fn search_directory(
+        &self,
+        query: &str,
+        directory: Directory,
+    ) -> ApiResult<Vec<DirectoryPodcast>> {
+        let body: serde_json::Value = self
+            .get(
+                "/api/data/proxy_search",
+                &[
+                    ("query", query.to_string()),
+                    ("index", directory.index().to_string()),
+                ],
+            )
+            .await?;
+        Ok(DirectoryPodcast::from_search(&body))
+    }
+
+    async fn search_youtube(&self, query: &str) -> ApiResult<Vec<YouTubeChannel>> {
+        let r: YouTubeSearchEnvelope = self
+            .get(
+                "/api/data/search_youtube_channels",
+                &[
+                    ("query", query.to_string()),
+                    ("user_id", self.user_id.to_string()),
+                    ("max_results", YOUTUBE_RESULTS.to_string()),
+                ],
+            )
+            .await?;
+        Ok(r.results)
+    }
+
+    async fn add_podcast(&self, podcast: &DirectoryPodcast) -> ApiResult<i64> {
+        let body = AddPodcastRequest {
+            podcast_values: PodcastValues {
+                pod_title: &podcast.title,
+                pod_artwork: &podcast.artwork,
+                pod_author: &podcast.author,
+                categories: &podcast.categories,
+                pod_description: &podcast.description,
+                pod_episode_count: podcast.episode_count,
+                pod_feed_url: &podcast.feed_url,
+                pod_website: &podcast.website,
+                pod_explicit: podcast.explicit,
+                user_id: self.user_id,
+            },
+            podcast_index_id: podcast.index_id,
+        };
+        let r: SubscribedEnvelope = self.post("/api/data/add_podcast", &body).await?;
+        Ok(r.podcast_id)
+    }
+
+    async fn subscribe_youtube(&self, channel_id: &str) -> ApiResult<i64> {
+        let path = "/api/data/youtube/subscribe";
+        let req = self.request(Method::POST, path).query(&[
+            ("channel_id", channel_id.to_string()),
+            ("user_id", self.user_id.to_string()),
+        ]);
+        let r: SubscribedEnvelope = decode(&self.send(req, path).await?, path)?;
+        Ok(r.podcast_id)
+    }
+
+    async fn remove_podcast(&self, podcast: &Podcast) -> ApiResult<()> {
+        if podcast.is_youtube {
+            // Channels are removed by name and URL, not id.
+            let body = RemoveChannelRequest {
+                user_id: self.user_id,
+                channel_name: &podcast.podcastname,
+                channel_url: &podcast.feedurl,
+            };
+            return self
+                .call(
+                    Method::POST,
+                    "/api/data/remove_youtube_channel",
+                    Some(&body),
+                )
+                .await;
+        }
+        let body = RemovePodcastRequest {
+            user_id: self.user_id,
+            podcast_id: podcast.podcastid,
+        };
+        self.call(Method::POST, "/api/data/remove_podcast_id", Some(&body))
+            .await
+    }
+
+    async fn get_custom_themes(&self) -> ApiResult<Vec<CustomTheme>> {
+        let r: CustomThemesEnvelope = self
+            .get(
+                &format!("/api/data/user/custom_themes/{}", self.user_id),
+                &[],
+            )
+            .await?;
+        Ok(r.themes)
     }
 
     async fn get_play_details(&self, podcast_id: i64, is_youtube: bool) -> ApiResult<PlayDetails> {

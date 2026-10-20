@@ -1,0 +1,31 @@
+{
+  "status": "true",
+  "feeds": [
+    {
+      "id": 75075,
+      "title": "Dan Carlin's Hardcore History",
+      "url": "https://feeds.example.com/hh.xml",
+      "originalUrl": "https://feeds.example.com/hh.xml",
+      "link": "https://www.dancarlin.com",
+      "description": "History, but hardcore.",
+      "author": "Dan Carlin",
+      "ownerName": "Dan Carlin",
+      "image": "https://example.com/hh.jpg",
+      "artwork": "https://example.com/hh-art.jpg",
+      "lastUpdateTime": 1760000000,
+      "itunesId": 173001861,
+      "language": "en",
+      "explicit": false,
+      "episodeCount": 72,
+      "categories": {"77": "Society", "125": "History"}
+    },
+    {
+      "id": 1,
+      "title": "No feed",
+      "url": "",
+      "categories": null,
+      "explicit": true
+    }
+  ],
+  "count": 2
+}

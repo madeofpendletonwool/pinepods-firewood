@@ -1,0 +1,28 @@
+{
+  "collections": [
+    {
+      "collection_id": 1,
+      "user_id": 2,
+      "name": "Saved",
+      "description": null,
+      "is_default": true,
+      "icon": "ph-bookmark-simple",
+      "created_at": "2026-01-01T00:00:00",
+      "last_updated": "2026-01-01T00:00:00",
+      "episode_count": 14,
+      "auto_add_categories": null
+    },
+    {
+      "collection_id": 5,
+      "user_id": 2,
+      "name": "To share",
+      "description": "Good ones for Sam",
+      "is_default": false,
+      "icon": "ph-heart",
+      "created_at": "2026-02-01T00:00:00",
+      "last_updated": "2026-02-01T00:00:00",
+      "episode_count": 2,
+      "auto_add_categories": ["Comedy"]
+    }
+  ]
+}
