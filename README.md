@@ -33,36 +33,21 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 
 ## 🚀 Installation
 
-### 🎯 Quick Install (Recommended)
+> The only published release, 0.1.0, predates most of the features above. Until a newer
+> release is out, build from source to get them.
 
-**One-liner installer** (Linux/macOS/Windows):
+### 🎯 Install script
+
+Linux, macOS, and Windows through Git Bash or WSL:
 ```bash
 curl -sSL https://raw.githubusercontent.com/madeofpendletonwool/pinepods-firewood/main/install.sh | bash
 ```
 
-### 📦 Package Managers
+### 📥 Release downloads
 
-```bash
-# Homebrew (macOS/Linux)
-brew install pinepods-firewood
-
-# Cargo (Rust)
-cargo install pinepods-firewood
-
-# Arch Linux (AUR)
-yay -S pinepods-firewood
-
-# Ubuntu/Debian
-wget https://github.com/madeofpendletonwool/pinepods-firewood/releases/latest/download/pinepods-firewood_VERSION_amd64.deb
-sudo dpkg -i pinepods-firewood_*.deb
-```
-
-### 📥 Manual Downloads
-
-Download pre-built binaries from [GitHub Releases](https://github.com/madeofpendletonwool/pinepods-firewood/releases/latest):
-- **Linux**: `pinepods-firewood-linux-amd64.tar.gz`
-- **macOS**: `pinepods-firewood-macos-amd64.tar.gz` (Intel) / `pinepods-firewood-macos-arm64.tar.gz` (Apple Silicon)  
-- **Windows**: `pinepods-firewood-windows-amd64.zip`
+From [GitHub Releases](https://github.com/madeofpendletonwool/pinepods-firewood/releases/latest):
+Linux (amd64, arm64) and macOS (Intel, Apple Silicon) archives, a Windows zip and a
+Debian/Ubuntu `.deb`. Firewood isn't in Homebrew, crates.io or the AUR yet.
 
 ### 🔨 Build from Source
 
