@@ -1,9 +1,5 @@
 # 🌲 PinePods Firewood Installation Guide
 
-> The only published release so far is 0.1.0. It predates remote control, headless mode,
-> cover art, the command palette and most of what the README describes. Until a newer
-> release is out, [build from source](#build-from-source) to get them.
-
 ## 🚀 Install script
 
 Linux, macOS, and Windows through Git Bash or WSL:
@@ -32,8 +28,6 @@ The release workflow builds:
 - `pinepods-firewood-macos-amd64.tar.gz` (Intel), `pinepods-firewood-macos-arm64.tar.gz` (Apple Silicon)
 - `pinepods-firewood-windows-amd64.zip`
 - `pinepods-firewood_VERSION_amd64.deb` for Debian and Ubuntu
-
-(0.1.0 has the Linux archives, the Apple Silicon archive and the `.deb`.)
 
 ```bash
 # Linux/macOS: unpack and put the binary on your PATH

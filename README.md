@@ -33,9 +33,6 @@ A TUI (terminal user interface) podcast client for PinePods. Stream your podcast
 
 ## 🚀 Installation
 
-> The only published release, 0.1.0, predates most of the features above. Until a newer
-> release is out, build from source to get them.
-
 ### 🎯 Install script
 
 Linux, macOS, and Windows through Git Bash or WSL:
