@@ -220,24 +220,6 @@ jobs:
             */pinepods-firewood-*.zip
             packages/*.deb
             
-  # Publish to crates.io
-  publish-crate:
-    needs: [create-release]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          cargo publish --allow-dirty || true
-          
   # Update package repositories
   update-homebrew:
     needs: [create-release]
