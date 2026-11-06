@@ -136,11 +136,6 @@ download_and_install() {
         version_tag=$VERSION
     fi
     
-    # Ensure version starts with 'v'
-    if [[ ! $version_tag =~ ^v ]]; then
-        version_tag="v$version_tag"
-    fi
-    
     local binary_name="pinepods_firewood"
     local archive_ext=".tar.gz"
     
