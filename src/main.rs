@@ -19,6 +19,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use pinepods_firewood::auth::{LoginTui, SessionInfo};
 use pinepods_firewood::cli::{self, Command, Mode};
+use pinepods_firewood::fatal;
 use pinepods_firewood::headless;
 use pinepods_firewood::mediakeys;
 use pinepods_firewood::nowplaying::NowPlaying;
@@ -141,6 +142,7 @@ async fn app_main(mode: Mode) -> Result<()> {
         println!("{crash_note}");
     }));
 
+    fatal::install();
     // Installs a panic hook of its own that restores the terminal before ours runs.
     let mut terminal = ratatui::try_init()?;
     // The terminal answers on stdin, so ask before anything else reads it.
