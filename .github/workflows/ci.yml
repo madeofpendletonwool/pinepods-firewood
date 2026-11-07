@@ -57,6 +57,12 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libssl-dev libclang-dev
       - run: cargo build --release --locked --target x86_64-unknown-linux-gnu
       - run: scripts/check-cpu-baseline.sh target/x86_64-unknown-linux-gnu/release/pinepods_firewood
+      # Lets a build be tried on real hardware before it's released.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pinepods-firewood-linux-amd64-${{ github.sha }}
+          path: target/x86_64-unknown-linux-gnu/release/pinepods_firewood
+          retention-days: 7
       - name: Run on an emulated CPU without AVX
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: qemu-x86_64 -cpu Nehalem
