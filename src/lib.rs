@@ -3,6 +3,7 @@ pub mod art;
 pub mod audio;
 pub mod auth;
 pub mod cli;
+pub mod fatal;
 pub mod headless;
 pub mod mediakeys;
 pub mod nowplaying;
