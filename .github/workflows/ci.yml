@@ -65,3 +65,11 @@ jobs:
         if: always()
         run: grep -hE '^(CFLAGS|CXXFLAGS|CC|CXX|RUSTFLAGS)[^ ]* = ' target/x86_64-unknown-linux-gnu/release/build/signalsmith-stretch-*/output || true
       - run: scripts/check-cpu-baseline.sh target/x86_64-unknown-linux-gnu/release/pinepods_firewood
+        if: always()
+      - name: Run on an emulated CPU without AVX
+        if: always()
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: qemu-x86_64 -cpu Nehalem
+        run: |
+          sudo apt-get install -y qemu-user
+          cargo test --release --locked --target x86_64-unknown-linux-gnu --test cpu_baseline
