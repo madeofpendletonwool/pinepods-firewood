@@ -46,3 +46,20 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libclang-dev
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+
+  cpu-baseline:
+    name: Linux x86-64 CPU baseline
+    # The same image the release builds on.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libssl-dev libclang-dev
+      - run: cargo build --release --locked --target x86_64-unknown-linux-gnu
+      - run: scripts/check-cpu-baseline.sh target/x86_64-unknown-linux-gnu/release/pinepods_firewood
+      - name: Run on an emulated CPU without AVX
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: qemu-x86_64 -cpu Nehalem
+        run: |
+          sudo apt-get install -y qemu-user
+          cargo test --release --locked --target x86_64-unknown-linux-gnu --test cpu_baseline

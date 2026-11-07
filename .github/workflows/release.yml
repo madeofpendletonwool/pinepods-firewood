@@ -25,8 +25,9 @@ jobs:
       matrix:
         include:
           # Linux targets
+          # Pinned: on ubuntu-latest (26.04) the C compiler defaults to x86-64-v3.
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             name: linux-amd64
             
           - target: aarch64-unknown-linux-gnu
@@ -83,7 +84,11 @@ jobs:
       - name: Build binary
         run: |
           cargo build --release --target ${{ matrix.target }}
-          
+
+      - name: Check the CPU baseline
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: scripts/check-cpu-baseline.sh target/${{ matrix.target }}/release/pinepods_firewood
+
       - name: Create package
         run: |
           mkdir -p dist
