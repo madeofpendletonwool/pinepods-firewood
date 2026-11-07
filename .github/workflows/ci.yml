@@ -49,25 +49,15 @@ jobs:
 
   cpu-baseline:
     name: Linux x86-64 CPU baseline
-    runs-on: ubuntu-latest
+    # The same image the release builds on.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y pkg-config libasound2-dev libssl-dev libclang-dev
-      - name: Show the C/C++ toolchain
-        run: |
-          env | grep -E 'FLAGS|^CC|^CXX' || true
-          type -a cc c++ gcc g++
-          c++ --version
-          c++ -Q --help=target | grep -E '^\s+-march=|^\s+-mavx2 |^\s+-mfma '
       - run: cargo build --release --locked --target x86_64-unknown-linux-gnu
-      - name: Show the flags the build used
-        if: always()
-        run: grep -hE '^(CFLAGS|CXXFLAGS|CC|CXX|RUSTFLAGS)[^ ]* = ' target/x86_64-unknown-linux-gnu/release/build/signalsmith-stretch-*/output || true
       - run: scripts/check-cpu-baseline.sh target/x86_64-unknown-linux-gnu/release/pinepods_firewood
-        if: always()
       - name: Run on an emulated CPU without AVX
-        if: always()
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: qemu-x86_64 -cpu Nehalem
         run: |

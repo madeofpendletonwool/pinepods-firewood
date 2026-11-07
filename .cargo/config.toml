@@ -1,0 +1,6 @@
+[env]
+# rustc already targets baseline x86-64 here, but C and C++ dependencies get whatever
+# the system compiler defaults to, and some default to newer CPUs. Released binaries
+# have to run on every x86-64 machine.
+CFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64"
+CXXFLAGS_x86_64_unknown_linux_gnu = "-march=x86-64"
