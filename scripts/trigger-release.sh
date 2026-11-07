@@ -141,7 +141,7 @@ main() {
         echo "https://github.com/madeofpendletonwool/pinepods-firewood/actions"
         echo ""
         log_info "Once complete, binaries will be available at:"
-        echo "https://github.com/madeofpendletonwool/pinepods-firewood/releases/tag/v$VERSION"
+        echo "https://github.com/madeofpendletonwool/pinepods-firewood/releases/tag/$VERSION"
     fi
 }
 

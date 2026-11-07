@@ -15,7 +15,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RELEASE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+  RELEASE_VERSION: ${{ github.event.inputs.version || github.event.client_payload.version || github.ref_name }}
 
 jobs:
   # Build job - runs on tag push or manual trigger
@@ -141,6 +141,7 @@ jobs:
           Section: utils
           Priority: optional
           Architecture: amd64
+          Depends: libc6 (>= 2.39), libasound2t64 | libasound2, libgcc-s1, libstdc++6
           Maintainer: PinePods Team <support@pinepods.online>
           Description: Terminal UI client for PinePods podcast server
            A fast, lightweight TUI client for interacting with PinePods

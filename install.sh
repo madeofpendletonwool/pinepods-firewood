@@ -38,7 +38,7 @@ print_usage() {
     echo "Examples:"
     echo "  $0                           # Install latest to default location"
     echo "  $0 -d ~/.local/bin           # Install to custom directory"
-    echo "  $0 -v v1.0.0                # Install specific version"
+    echo "  $0 -v 1.0.0                 # Install specific version"
     echo ""
     echo "Quick install:"
     echo "  curl -sSL https://raw.githubusercontent.com/madeofpendletonwool/pinepods-firewood/main/install.sh | bash"
@@ -136,6 +136,9 @@ download_and_install() {
         version_tag=$VERSION
     fi
     
+    # Release tags have no "v", but it's a natural thing to type.
+    version_tag=${version_tag#v}
+    
     local binary_name="pinepods_firewood"
     local archive_ext=".tar.gz"
     
@@ -157,7 +160,7 @@ download_and_install() {
     # Download archive
     log_info "Downloading PinePods Firewood $version_tag..."
     if command -v curl >/dev/null 2>&1; then
-        if ! curl -L -o "$tmp_dir/$archive_name" "$download_url"; then
+        if ! curl -fL -o "$tmp_dir/$archive_name" "$download_url"; then
             log_error "Failed to download $archive_name"
             exit 1
         fi

@@ -56,7 +56,7 @@ update_homebrew_formula() {
     log_info "Updating Homebrew formula for version $version"
     
     # Get SHA256 hashes for all platforms
-    local base_url="https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/v$version"
+    local base_url="https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/$version"
     local macos_amd64_sha256
     local macos_arm64_sha256
     local linux_amd64_sha256
@@ -116,8 +116,8 @@ license=('MIT')
 depends=('alsa-lib' 'openssl')
 provides=('pinepods-firewood')
 conflicts=('pinepods-firewood')
-source_x86_64=("https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/v\$pkgver/pinepods-firewood-linux-amd64.tar.gz")
-source_aarch64=("https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/v\$pkgver/pinepods-firewood-linux-arm64.tar.gz")
+source_x86_64=("https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/\$pkgver/pinepods-firewood-linux-amd64.tar.gz")
+source_aarch64=("https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/\$pkgver/pinepods-firewood-linux-arm64.tar.gz")
 sha256sums_x86_64=('SKIP')  # Update with actual SHA256
 sha256sums_aarch64=('SKIP')  # Update with actual SHA256
 
@@ -156,7 +156,7 @@ InstallModes:
 UpgradeBehavior: install
 Installers:
 - Architecture: x64
-  InstallerUrl: https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/v$version/pinepods-firewood-windows-amd64.zip
+  InstallerUrl: https://github.com/madeofpendletonwool/pinepods-firewood/releases/download/$version/pinepods-firewood-windows-amd64.zip
   InstallerSha256: PLACEHOLDER_SHA256
 ManifestType: installer
 ManifestVersion: 1.2.0
